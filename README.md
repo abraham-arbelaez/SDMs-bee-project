@@ -1,1 +1,3 @@
-# SDMs-bee-project
+# Stat 764 final project
+
+## Bees!
