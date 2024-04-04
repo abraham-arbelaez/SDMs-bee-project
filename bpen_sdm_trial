@@ -1,0 +1,241 @@
+# Species distribution modeling of B. pensylvanicus in KS
+# Following tutorial by Jeff Oliver
+# 2024-03-30
+
+# Note: tutorial only incorporates bioclim variables from 1970-2000, but can add %land cover after buffer analysis
+# Note: tutorial does not display the effect of each predictor variable on response variable
+# Note: using glm/ gam, recommended to have 1000 - 10,000 random PA pts with equal weight
+
+dir.create(path = "data")
+
+
+#############################################################################################
+#
+# DATA AND QUALITY CONTROL
+#
+############################################################################################
+
+# Load packages
+library(terra)
+library(geodata)
+library(predicts)
+library(tidyverse)
+
+# Download 19 bioclimatic data from WorldClim
+bioclim_data <- worldclim_global(var = "bio",
+                                 res = 2.5,
+                                 path = "data/")
+
+# Read in BPEN observations (current only; 2020 - 2023)
+obs_data <- read.csv(file = "ver_KS_bpen_current.csv") #157 observations
+
+# Select only ID, lat, and long columns
+obs_data <- obs_data %>%
+  select(Latitude, Longitude)
+
+# Add ID column
+obs_data$ID <- 1:nrow(obs_data)
+
+# Check the data to make sure it loaded correctly
+summary(obs_data) #No NA values
+
+# Determine the geographic extent of our data
+max_lat <- ceiling(max(obs_data$Latitude))
+min_lat <- floor(min(obs_data$Latitude))
+max_lon <- ceiling(max(obs_data$Longitude))
+min_lon <- floor(min(obs_data$Longitude))
+# Store boundaries in a single extent object (Can change to more accurately reflect KS boundaries)
+geographic_extent <- ext(x = c(min_lon, max_lon, min_lat, max_lat))
+
+# Download data with geodata's world function to use for our base map
+world_map <- world(resolution = 3,
+                   path = "data/")
+
+# Crop the map to our area of interest
+my_map <- crop(x = world_map, y = geographic_extent)
+
+# Plot the base map
+plot(my_map,
+     axes = TRUE,
+     col = "grey95")
+
+# Add the points for individual observations
+points(x = obs_data$Longitude,
+       y = obs_data$Latitude,
+       col = "olivedrab",
+       pch = 20,
+       cex = 0.75)
+
+
+#############################################################################################
+#
+# PREPARING DATA FOR MODELING
+#
+############################################################################################
+
+
+# Build an extent object that is 25% larger than the extent of recorded observations
+sample_extent <- geographic_extent * 1.25
+
+#Crop bioclim data to desired extent (new extent object)
+bioclim_data <- crop(x = bioclim_data, y = sample_extent)
+
+# Plot the first of the bioclim variables to check cropping success
+plot(bioclim_data[[1]], main = "annual mean temp in degrees C")
+
+## Generating pseudo-absence points !!
+
+# Set the seed for random-number generator to ensure results are similar
+set.seed(20210707)
+
+# Randomly sample points (chose 500 bc it is about 2-3x as many as record points)
+background <- spatSample(x = bioclim_data,
+                         size = 500,
+                         values = FALSE,
+                         na.rm = TRUE,
+                         xy = TRUE)
+
+# Look at first few rows of background
+head(background)
+
+# Plot the base map
+plot(my_map,
+     axes = TRUE,
+     col = "grey95")
+
+# Add pseudo-absence points
+plot(background,
+     col = "grey30",
+     pch = 1,
+     cex = 0.75)
+
+#Add the points for recorded observations
+points(x = obs_data$Longitude,
+       y = obs_data$Latitude,
+       col = "olivedrab",
+       pch = 20,
+       cex = 0.75)
+
+
+## Create single dataframe w/ presence pts, PA pts, and cliamte data for each pt.
+
+#Pull out coordinate columns, x (long) first, then y (lat) from recorded data
+presence <- obs_data[, c("Longitude", "Latitude")]
+#Add column indicating presence
+presence$pa <- 1
+
+#Convert background data to a df
+absence <- as.data.frame(background)
+#Updata col names so they match presence pts
+colnames(absence) <- c("Longitude", "Latitude")
+#Add col indicating absence
+absence$pa <- 0
+
+# Join the data into a single df
+all_points <- rbind(presence, absence)
+
+# Check on data
+head(all_points) #Long, lat, pa
+
+
+#############################################################################################
+#
+# ADDING CLIMATE DATA
+#
+############################################################################################
+
+# Pull out raster data for each geographic coordinate
+bioclim_extract <- terra::extract(x = bioclim_data, #raster data
+                           y = all_points[, c("Longitude", "Latitude")],
+                           ID = FALSE)
+
+# Add the point and climate datasets together
+points_climate <- cbind(all_points, bioclim_extract)
+
+# Identify cols that are lat & long
+drop_cols <- which(colnames(points_climate) %in% c("Longitude", "Latitude"))
+drop_cols #1 2
+
+#Remove geographic coordinates from the df
+points_climate <- points_climate[, -drop_cols]
+
+# Check new joined df
+head(points_climate) #pa, bio1, bio2,..., bio19
+
+
+#############################################################################################
+#
+# TRAINING AND TESTING DATA
+#
+############################################################################################
+
+## training set --> data used to build the model (80%)
+
+## testing set --> data used to evaluate the model (20%)
+
+# Create a vector indicating fold
+fold <- folds(x = points_climate,
+             k = 5,
+             by = points_climate$pa)
+
+#Table showing how many times each of the fold values (intergers between the five groups)
+table(fold) #131 in each
+
+# Assign fold 1 to testing, and the rest to training
+testing <- points_climate[fold == 1,]
+training <- points_climate[fold != 1,]
+
+
+
+#############################################################################################
+#
+# MODEL BUILDING
+#
+############################################################################################
+
+# Build model using all predictor variables
+glm_model <- glm(pa ~ ., data = training, family = binomial())
+
+# Get predicted values from the model
+glm_predict <- predict(bioclim_data, glm_model, type = "response")
+
+#Print predicted values on map (shows probability of occurrence)
+plot(glm_predict) #pink = 0 prob, green = 100 prob
+
+# Use testing data for model evaluation
+glm_eval <- pa_evaluate(p = testing[testing$pa == 1,], #presence = 1
+                        a = testing[testing$pa == 0,], #absence = 0
+                        model = glm_model,
+                        type = "response")
+
+# Determine the minimum threshold for "presence"
+glm_threshold <- glm_eval@thresholds$max_spec_sens
+
+
+## Use threshold to paint a map with sites predicted to be suitable
+
+# Plot base map
+plot(my_map,
+     axes = TRUE,
+     col = "grey95")
+
+# Plot areas where prob of occurrence is greater than threshold
+plot(glm_predict > glm_threshold,
+     add = TRUE,
+     legend = FALSE,
+     col = c(NA, "olivedrab"))
+
+# Plot probability of occurrence
+plot(glm_predict,
+     add = TRUE,
+     legend = TRUE)
+
+# Add the recorded observations
+points(x = obs_data$Longitude,
+       y = obs_data$Latitude,
+       col = "black",
+       pch = "+",
+       cex = 0.75)
+
+# Redraw the country borders
+plot(my_map, add = TRUE, border = "grey5")
