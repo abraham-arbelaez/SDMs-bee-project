@@ -1,3 +1,5 @@
+### Updated Version: April 20, 2024
+
 # Load required packages
 
 library(pacman)
@@ -139,8 +141,8 @@ rl.nlcd.grass[] <- ifelse(rl.nlcd.grass[]==176,1,0) #0 if not grassland (water =
 plot(rl.nlcd.grass)
 plot(sf.kansas, add= T, col = NA, lwd = 4)
 
-df.bpen.pa$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bpen,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
-df.bimp.pa$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bimp,buffer=2000), mean)) *100
+df.bpen.pa$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bimp,buffer=2000), mean))
 
 
 
@@ -151,8 +153,8 @@ rl.nlcd.dev[] <- ifelse(rl.nlcd.dev[] %in% c(82, 121:124), 1,0)
 plot(rl.nlcd.dev)
 plot(sf.kansas, add= T, col = NA, lwd = 4)
 
-df.bpen.pa$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.sample.bpen,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
-df.bimp.pa$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.sample.bimp,buffer=2000), mean)) *100
+df.bpen.pa$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.sample.bimp,buffer=2000), mean))
 
 
 
@@ -163,8 +165,8 @@ rl.nlcd.wet[] <- ifelse(rl.nlcd.wet[] %in% c(83, 87, 92, 111, 129, 190), 1,0)
 plot(rl.nlcd.wet)
 plot(sf.kansas, add= T, col = NA, lwd = 4)
 
-df.bpen.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bpen,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
-df.bimp.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bimp,buffer=2000), mean)) *100
+df.bpen.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bimp,buffer=2000), mean))
 
 
 
@@ -175,8 +177,8 @@ rl.nlcd.wood[] <- ifelse(rl.nlcd.wood[] %in% c(63:64,141:143, 152), 1,0)
 plot(rl.nlcd.wood)
 plot(sf.kansas, add= T, col = NA, lwd = 4)
 
-df.bpen.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bpen,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
-df.bimp.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bimp,buffer=2000), mean)) *100
+df.bpen.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bimp,buffer=2000), mean))
 
 
 
@@ -188,8 +190,8 @@ rl.nlcd.ag[] <- ifelse(rl.nlcd.ag[] %in% c(1:60,66:77,204:254), 1,0)
 plot(rl.nlcd.ag)
 plot(sf.kansas, add= T, col = NA, lwd = 4)
 
-df.bpen.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bpen,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
-df.bimp.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag, pts.sample.bimp,buffer=2000), mean)) *100
+df.bpen.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag, pts.sample.bimp,buffer=2000), mean))
 
 
 #Inspect land cover histograms (NOTE: includes pres & abs)
@@ -246,7 +248,7 @@ df.bpen.pa$tmin <- unlist(lapply(raster::extract(tmin,pts.sample.bpen,buffer=200
 df.bimp.pa$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.bimp,buffer=2000), mean))
 
 # Annual mean temp
-df.bpen.pa$tmean <- unlist(lapply(raster::extract(tmean,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bpen.pa$tmean <- unlist(lapply(raster::extract(tmean,pts.sample.bpen,buffer=2000),mean))#2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 df.bimp.pa$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.bimp,buffer=2000), mean))
 
 
@@ -270,6 +272,10 @@ df.bimp.pa %>%
 #Inspect updated df
 head(df.bpen.pa) # X, Y, pa, grass.perc, dev.perc, wet.perc, wood.perc, ag.perc, precip, tmax, tmin, tmean
 head(df.bimp.pa) # X, Y, pa, grass.perc, dev.perc, wet.perc, wood.perc, ag.perc, precip, tmax, tmin, tmean
+
+
+write.csv(df.bpen.pa, file = "df.bpen.pa.csv")
+write.csv(df.bimp.pa, file = "df.bimp.pa.csv")
 
 ################################################################################################
 #
@@ -307,7 +313,7 @@ training.bimp <- df.bimp.pa[fold.bimp != 1,]
 #
 ######################################################################################################
 
-# Fit three different spatio-temporal models to BPEN data
+# Fit three different spatio-temporal models to BPEN data (w/ pseudo-absences)
 m1.bpen <- gam(pa ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + tmax + tmin + tmean + s(X,Y, bs = "gp"),
                family = poisson(link = "log"), data = df.bpen.pa)
 
@@ -316,6 +322,15 @@ m2.bpen <- gam(pa ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + pre
 
 m3.bpen <- gam(pa ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + tmax + tmin + tmean + s(X,Y, bs = "gp"),
                               family = binomial(link = "logit"), data = df.bpen.pa) 
+
+
+# Fit three different spatio-temporal models to BPEN data (presence-only for IPPP)
+
+df.bpen.p <- df.bpen.pa %>%
+  filter(pa == "1")
+
+m1.bpen.p <- gam(pa ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + tmax + tmin + tmean + s(X,Y, bs = "gp"),
+               family = poisson(link = "log"), data = df.bpen.p)
 
 #3.bpen <- gam(list(pa ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + tmax + tmin + tmean + s(X,Y, bs = "gp"), ~ grass.perc),
                #family = ziplss(), data = df.bpen.pa) #switch out ~variable
@@ -389,10 +404,19 @@ df.bpen.pa$pred <- c(predict(m3.bpen, newdata = df.bpen.pa,
 df.bimp.pa$pred <- predict(m3.bimp, newdata = df.bimp.pa,
                             type = "response")
 
+df.bpen.p$pred <- predict(m1.bpen.p, newdata = df.bpen.p,
+                          type = "response")
+
 #Plotting model-predicted probability values
 df.predictions <- df.bpen.pa #rename to clarify
+df.pred.bpen.p <- df.bpen.p
 
 temp <- df.predictions
+coordinates(temp) = ~X + Y
+proj4string(temp) <- crs(sf.ks.boundary)
+temp <- spTransform(temp, crs(sf.ks.boundary))
+
+temp <- df.pred.bpen.p
 coordinates(temp) = ~X + Y
 proj4string(temp) <- crs(sf.ks.boundary)
 temp <- spTransform(temp, crs(sf.ks.boundary))
@@ -417,11 +441,12 @@ library(spatstat)
 #convert df to sf
 sf.pred.bpen <- st_as_sf(df.bpen.pa, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
 sf.pred.bimp <- st_as_sf(df.bimp.pa, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.bpen.p <- st_as_sf(df.bpen.p, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
 
 #project to Albers Equal Area Conic
 sf.pred.bpen <- st_transform(sf.pred.bpen, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
 sf.pred.bimp <- st_transform(sf.pred.bimp, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
-
+sf.pred.bpen.p <- st_transform(sf.pred.bpen.p, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
 
 #convert to ppp
 ppp.pred.bpen <- as.ppp(sf.pred.bpen)
@@ -432,6 +457,9 @@ ppp.pred.bimp <- as.ppp(sf.pred.bimp)
 marks(ppp.pred.bimp) <- sf.pred.bimp
 marks(ppp.pred.bimp)
 
+ppp.pred.bpen.p <- as.ppp(sf.pred.bpen.p)
+marks(ppp.pred.bpen.p) <- sf.pred.bpen.p
+marks(ppp.pred.bpen.p)
 
 
 #Filter to pres only, project to Albers, and convert to ppp
@@ -451,7 +479,7 @@ ppp.pres.bimp <- as.ppp(sf.pres.bimp)
 #Plotting
 dev.off()
 plot(density(ppp.pred.bpen, which.marks = "pred"), col = color,
-     main = "Density plot of model-predicted probability of occurrence \n for Bombus pensylvanicus (with recorded presence points in white)")
+     main = "Density plot of model-predicted probability of occurrence \n for Bombus pensylvanicus (using pseud-absence pts & GAM/Binomial)")
 plot(sf.pres.bpen, add = T, col = "black")
 
 plot(density(ppp.pres.bpen, use.marks = FALSE), col = color,
@@ -464,6 +492,12 @@ plot(sf.pres.bimp, add = T, col = "black")
 
 plot(density(ppp.pres.bimp, use.marks = FALSE), col = color,
      main = "Density plot of ONLY RECORDED POINTS for B. impatiens")
+
+# Model-predicted (gam, poisson) w/ presence- only bpen records
+plot(density(ppp.pred.bpen.p, which.marks = "pred"), col = color,
+     main = "Density plot of model-predicted probability of occurrence \n for Bombus pensylvanicus (with presence-only pts & GAM/Poisson)")
+plot(sf.pred.bpen.p, add = T, col = "black")
+
 
 
 ## Notes from discussion w/ Trevor, Nikki, and Yoshi: 
@@ -479,5 +513,6 @@ plot(density(ppp.pres.bimp, use.marks = FALSE), col = color,
 # Keep separate, then analyze slopes (one is high quality, one is low quality, do they show the same info??)
 # Hill 1965 paper- number of datasets to include
 
+ 
  
 
