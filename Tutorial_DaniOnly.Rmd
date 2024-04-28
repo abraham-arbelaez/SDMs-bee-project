@@ -1,0 +1,919 @@
+---
+title: "STAT764 Final Project Tutorial -- Dani's Code Only"
+author: "Dani Holthaus"
+date: "2024-04-28"
+output: html_document
+---
+
+## Background {.tabset}
+
+In this section, we will outline the packages and datasets used. 
+
+### Load the packages
+
+```{r}
+library(pacman)
+p_load(sf,sp,raster,mgcv,plotrix,gstat,tidyverse,terra,geodata,predicts, RColorBrewer)
+
+```
+
+### Load the data
+
+```{r}
+#Assign CRS objects
+wgs84 <- "+proj=longlat +datum=WGS84 +no_defs +type=crs"
+albers <- "+proj=aea +lat_0=40 +lon_0=-96 +lat_1=20 +lat_2=60 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs"
+
+# Download bpen & bimp occurence dataset
+df1 <- read.csv("BBOccurenceRecords_Verified_KS.csv")
+df1.bpen <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus pensylvanicus (De Geer, 1773)") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)# Keep only the data on current bpen records (2020-2023)
+
+df1.bimp <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus impatiens Cresson, 1863") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)
+
+df1.bgris <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus griseocollis (De Geer, 1773)") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)
+
+df1.bfrat <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus fraternus (Smith, 1854)") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)
+
+# Download great plains bumble bee atlas survey dataset (filter to gpbba only & target species)
+df1.bba <- read.csv("BBW_KansasRecords_5April2024_Holthaus_KState.csv")
+
+df1.bba.total <- df1.bba %>%
+  filter(datasetID %in% c("Great Plains Bumble Bee Atlas", "Bumble Bee Atlas", 
+                          "Nebraska Bumble Bee Atlas", "Missouri Bumble Bee Atlas"))
+df1.BPEN <- df1.bba.total %>%
+  filter(vernacularName == "American bumble bee")
+df1.BIMP <- df1.bba.total %>%
+  filter(vernacularName == "Common eastern bumble bee")
+df1.BGRIS <- df1.bba.total %>%
+  filter(vernacularName == "Brown-belted bumble bee")
+df1.BFRAT <- df1.bba.total %>%
+  filter(vernacularName == "Southern plains bumble bee")
+
+# Download shapefile of Kansas from census.gov
+#download.file("http://www2.census.gov/geo/tiger/GENZ2015/shp/cb_2015_us_state_20m.zip", destfile = "states.zip")
+#unzip("states.zip")
+sf.us <- st_read("cb_2015_us_state_20m.shp",quiet = TRUE)
+sf.kansas <- sf.us[48,6] # filter to KS
+sf.kansas <- as(sf.kansas, 'Spatial') #reset as sf
+plot(sf.kansas,main="",col="white")
+
+# Download KS boundary alternative
+sf.ks.boundary <- st_read("KS_boundary.shp")
+sf.ks.boundary <- st_transform(sf.ks.boundary, crs = wgs84)
+sf.ks.boundary <- sf.ks.boundary[,7] #geometry column only
+
+# Download PRISM climate data (monthly, annual values, 4km resolution)
+precip <- raster("./prism/PRISM_ppt_stable_4kmM3_2022_bil.bil")
+tmax <- raster("./prism/PRISM_tmax_stable_4kmM3_2022_bil.bil")
+tmin <- raster("./prism/PRISM_tmin_stable_4kmM3_2022_bil.bil")
+tmean <- raster("./prism/PRISM_tmean_stable_4kmM3_2022_bil.bil")
+
+precip <- projectRaster(precip, crs = wgs84, method = "bilinear")
+tmax <- projectRaster(tmax, crs = wgs84, method = "bilinear")
+tmin <- projectRaster(tmin, crs = wgs84, method = "bilinear")
+tmean <- projectRaster(tmean, crs = wgs84, method = "bilinear")
+
+# Download land cover raster for 2022 from Cropscape
+rl.nlcd2022 <- raster("./CDL_2022_20/CDL_2022_20.tif")
+plot(rl.nlcd2022)
+
+rl.nlcd2022 <- projectRaster(rl.nlcd2022, crs = wgs84, method = "ngb")
+```
+
+### Exploratory Data Analysis
+
+In this section, we will explore the bumble occurrence records and great plains bumble bee atlas survey records both across space and time, independently.
+
+```{r}
+df1 <- df1 %>%
+  filter(ScientificName %in% c("Bombus pensylvanicus (De Geer, 1773)", "Bombus impatiens Cresson, 1863"))
+
+df1.bba.total$verbatimEventDate <- mdy(df1.bba.total$verbatimEventDate) #Assign date object
+df1.bba.total <- df1.bba.total %>%
+  filter(vernacularName %in% c("American bumble bee", "Common eastern bumble bee")) %>%
+  mutate(Year = year(verbatimEventDate)) #create new year column
+  
+
+## Time only
+# Occurrence records (GBIF)
+par(mfrow = c(2,2))
+hist(df1$YearObserved[df1$ScientificName == "Bombus pensylvanicus (De Geer, 1773)"],
+     main = "Bombus pensylvanicus occurrence records", xlab = "Year", col = "tomato")
+hist(df1$YearObserved[df1$ScientificName == "Bombus impatiens Cresson, 1863"],
+     main = "Bombus impatiens occurrence records", xlab = "Year", ylim=c(0,200), col = "steelblue")
+hist(df1.bba.total$Year[df1.bba.total$vernacularName == "American bumble bee"],
+     main = "Bombus pensylvanicus GPBBA records", xlab = "Year", col = "tomato")
+hist(df1.bba.total$Year[df1.bba.total$vernacularName == "Common eastern bumble bee"],
+     main = "Bombus impatiens GPBBA records", xlab = "Year", xlim = c(2020,2023), col = "steelblue")
+
+
+```
+
+## Data Wrangling {.tabset}
+
+### Bumble Bee Records
+```{r}
+## Convert pts to sf, then create df with only X and Y columns, assign 1 for presence in pa column
+pts.bpen <- st_as_sf(df1.bpen, coords = c("Longitude", "Latitude"), crs = wgs84)
+df.bpen <- st_coordinates(pts.bpen) %>% as.data.frame
+head(df.bpen) #X,Y
+pres.bpen <- df.bpen #rename for clarity
+pres.bpen$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.bimp <- st_as_sf(df1.bimp, coords = c("Longitude", "Latitude"), crs = wgs84)
+df.bimp <- st_coordinates(pts.bimp) %>% as.data.frame
+head(df.bimp) #X,Y
+pres.bimp <- df.bimp #rename for clarity
+pres.bimp$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.bgris <- st_as_sf(df1.bgris, coords = c("Longitude", "Latitude"), crs = wgs84)
+df.bgris <- st_coordinates(pts.bgris) %>% as.data.frame
+head(df.bgris) #X,Y
+pres.bgris <- df.bimp #rename for clarity
+pres.bgris$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.bfrat <- st_as_sf(df1.bfrat, coords = c("Longitude", "Latitude"), crs = wgs84)
+df.bfrat <- st_coordinates(pts.bfrat) %>% as.data.frame
+head(df.bfrat) #X,Y
+pres.bfrat <- df.bfrat #rename for clarity
+pres.bfrat$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.BPEN <- st_as_sf(df1.BPEN, coords = c("decimalLongitude", "decimalLatitude"), crs = wgs84)
+df.BPEN <- st_coordinates(pts.BPEN) %>% as.data.frame
+head(df.BPEN) #X,Y
+pres.BPEN <- df.BPEN #rename for clarity
+pres.BPEN$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.BIMP <- st_as_sf(df1.BIMP, coords = c("decimalLongitude", "decimalLatitude"), crs = wgs84)
+df.BIMP <- st_coordinates(pts.BIMP) %>% as.data.frame
+head(df.BIMP) #X,Y
+pres.BIMP <- df.bba.bimp #rename for clarity
+pres.BIMP$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.BGRIS <- st_as_sf(df1.BGRIS, coords = c("decimalLongitude", "decimalLatitude"), crs = wgs84)
+df.BGRIS <- st_coordinates(pts.BGRIS) %>% as.data.frame
+head(df.BGRIS) #X,Y
+pres.BGRIS <- df.BGRIS #rename for clarity
+pres.BGRIS$pa <- 1 #Create pa column, assign 1 for presence
+
+pts.BFRAT <- st_as_sf(df1.BFRAT, coords = c("decimalLongitude", "decimalLatitude"), crs = wgs84)
+df.BFRAT <- st_coordinates(pts.BFRAT) %>% as.data.frame
+head(df.BFRAT) #X,Y
+pres.BFRAT <- df.BFRAT #rename for clarity
+pres.BFRAT$pa <- 1 #Create pa column, assign 1 for presence
+
+
+
+## Generate df with 10,000 random points covering entire study area, assign 0 for absence in pa column
+pts.random <- st_sample(sf.ks.boundary, 10000)
+df.random <- st_coordinates(pts.random) %>% as.data.frame
+head(df.random) #X,Y
+rand <- df.random #rename for clarity
+rand$pa <- 0 #create pa column, assign 0 for absence
+
+# Join into a single df with pres & rand
+df.bpen.pa <- rbind(pres.bpen, rand)
+df.bimp.pa <- rbind(pres.bimp, rand)
+df.bgris.pa <- rbind(pres.bgris, rand)
+df.bfrat.pa <- rbind(pres.bfrat, rand)
+df.BPEN.pa <- rbind(pres.BPEN, rand)
+df.BIMP.pa <- rbind(pres.BIMP, rand)
+df.BGRIS.pa <- rbind(pres.BGRIS, rand)
+df.BFRAT.pa <- rbind(pres.BFRAT, rand)
+
+head(df.bpen.pa) #X,Y,pa
+head(df.bimp.pa) #X,Y,pa
+head(df.bgris.pa)
+head(df.bfrat.pa)
+head(df.BPEN.pa)
+head(df.BIMP.pa)
+head(df.BGRIS.pa)
+head(df.BFRAT.pa)
+
+# Create sf object to plot points
+sf.bpen.pa <- st_as_sf(df.bpen.pa, coords = c("X","Y"), crs = wgs84)
+sf.bimp.pa <- st_as_sf(df.bimp.pa, coords = c("X", "Y"), crs = wgs84)
+sf.bgris.pa <- st_as_sf(df.bgris.pa, coords = c("X", "Y"), crs = wgs84)
+sf.bfrat.pa <- st_as_sf(df.bfrat.pa, coords = c("X", "Y"), crs = wgs84)
+sf.BPEN.pa <- st_as_sf(df.BPEN.pa, coords = c("X", "Y"), crs = wgs84)
+sf.BIMP.pa <- st_as_sf(df.BIMP.pa, coords = c("X", "Y"), crs = wgs84)
+sf.BGRIS.pa <- st_as_sf(df.BGRIS.pa, coords = c("X", "Y"), crs = wgs84)
+sf.BFRAT.pa <- st_as_sf(df.BFRAT.pa, coords = c("X", "Y"), crs = wgs84)
+
+plot(sf.kansas, main = "KS BPEN presence-only locations between 2020-2023")
+plot(sf.bpen.pa %>% filter(pa == 1), add = T, col = alpha("steelblue", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS BPEN occupancy locations between 2020-2023")
+plot(sf.BPEN.pa %>% filter(pa == 1), add = T, col = alpha("steelblue", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS BIMP presence-only locations between 2020-2023")
+plot(sf.bimp.pa %>% filter(pa == 1), add = T, col = alpha("tomato", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS BIMP occupancy locations between 2020-2023")
+plot(sf.BIMP.pa %>% filter(pa == 1), add = T, col = alpha("tomato", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS BGRIS presence-only locations between 2020-2023")
+plot(sf.bgris.pa %>% filter(pa == 1), add = T, col = alpha("steelblue", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS GRIS occupancy locations between 2020-2023")
+plot(sf.BGRIS.pa %>% filter(pa == 1), add = T, col = alpha("steelblue", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS BFRAT presence-only locations between 2020-2023")
+plot(sf.bfrat.pa %>% filter(pa == 1), add = T, col = alpha("tomato", 0.6), cex = 0.8)
+
+plot(sf.kansas, main = "KS BFRAT occupancy locations between 2020-2023")
+plot(sf.BFRAT.pa %>% filter(pa == 1), add = T, col = alpha("tomato", 0.6), cex = 0.8)
+
+
+```
+
+### Land Cover Records
+```{r}
+
+# Make SpatialPoints data frame (for pa datasets)
+pts.sample.bpen <- data.frame(long = df.bpen.pa$X,lat = df.bpen.pa$Y)
+coordinates(pts.sample.bpen) =~ long + lat
+proj4string(pts.sample.bpen) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.bimp <- data.frame(long = df.bimp.pa$X,lat = df.bimp.pa$Y)
+coordinates(pts.sample.bimp) =~ long + lat
+proj4string(pts.sample.bimp) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.bgris <- data.frame(long = df.bgris.pa$X,lat = df.bgris.pa$Y)
+coordinates(pts.sample.bgris) =~ long + lat
+proj4string(pts.sample.bgris) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.bfrat <- data.frame(long = df.bfrat.pa$X,lat = df.bfrat.pa$Y)
+coordinates(pts.sample.bfrat) =~ long + lat
+proj4string(pts.sample.bfrat) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BPEN <- data.frame(long = df.BPEN.pa$X,lat = df.BPEN.pa$Y)
+coordinates(pts.sample.BPEN) =~ long + lat
+proj4string(pts.sample.BPEN) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BIMP <- data.frame(long = df.BIMP.pa$X,lat = df.BIMP.pa$Y)
+coordinates(pts.sample.BIMP) =~ long + lat
+proj4string(pts.sample.BIMP) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BGRIS <- data.frame(long = df.BGRIS.pa$X,lat = df.BGRIS.pa$Y)
+coordinates(pts.sample.BGRIS) =~ long + lat
+proj4string(pts.sample.BGRIS) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BFRAT <- data.frame(long = df.BFRAT.pa$X,lat = df.BFRAT.pa$Y)
+coordinates(pts.sample.BFRAT) =~ long + lat
+proj4string(pts.sample.BFRAT) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+
+# Make SpatialPoints data frame (for pres-only & rand datasets)
+pts.sample.bpen1 <- data.frame(long = pres.bpen$X,lat = pres.bpen$Y)
+coordinates(pts.sample.bpen1) =~ long + lat
+proj4string(pts.sample.bpen1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.bimp1 <- data.frame(long = pres.bimp$X,lat = pres.bimp$Y)
+coordinates(pts.sample.bimp1) =~ long + lat
+proj4string(pts.sample.bimp1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.bgris1 <- data.frame(long = pres.bgris$X,lat = pres.bgris$Y)
+coordinates(pts.sample.bgris1) =~ long + lat
+proj4string(pts.sample.bgris1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.bfrat1 <- data.frame(long = pres.bfrat$X,lat = pres.bfrat$Y)
+coordinates(pts.sample.bfrat1) =~ long + lat
+proj4string(pts.sample.bfrat1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BPEN1 <- data.frame(long = pres.BPEN$X,lat = pres.BPEN$Y)
+coordinates(pts.sample.BPEN1) =~ long + lat
+proj4string(pts.sample.BPEN1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BIMP1 <- data.frame(long = pres.BIMP$X,lat = pres.BIMP$Y)
+coordinates(pts.sample.BIMP1) =~ long + lat
+proj4string(pts.sample.BIMP1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BGRIS1 <- data.frame(long = pres.BGRIS$X,lat = pres.BGRIS$Y)
+coordinates(pts.sample.BGRIS1) =~ long + lat
+proj4string(pts.sample.BGRIS1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.BFRAT1 <- data.frame(long = pres.BFRAT$X,lat = pres.BFRAT$Y)
+coordinates(pts.sample.BFRAT1) =~ long + lat
+proj4string(pts.sample.BFRAT1) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.sample.rand <- data.frame(long = rand$X,lat = rand$Y)
+coordinates(pts.sample.rand) =~ long + lat
+proj4string(pts.sample.rand) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+
+### Land cover extraction (note: took 10 min for each pa dataset to load, so I had the presence dfs and rand df to run separately)
+### separating the datasets decreased the processing time from 480 minutes (8hrs) to ~70 minutes
+
+
+
+# Assign 1 to grassland/pasture land cover categories
+rl.nlcd.grass <- rl.nlcd2022
+rl.nlcd.grass[] <- ifelse(rl.nlcd.grass[]==176,1,0) #0 if not grassland (water = 95)
+
+plot(rl.nlcd.grass)
+plot(sf.kansas, add= T, col = NA, lwd = 4)
+
+
+pres.bpen$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bpen1,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+pres.bimp$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bimp1,buffer=2000), mean))
+pres.bgris$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bgris1,buffer=2000), mean))
+pres.bfrat$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.bfrat1,buffer=2000), mean))
+pres.BPEN$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.BPEN1,buffer=2000), mean))
+pres.BIMP$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.BIMP1,buffer=2000), mean))
+pres.BGRIS$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.BGRIS1,buffer=2000), mean))
+pres.BFRAT$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.sample.BFRAT1,buffer=2000), mean))
+rand$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass, pts.sample.rand, buffer=2000), mean))
+
+
+# Assign 1 to developed (med, high) land cover categories
+rl.nlcd.devHigh <- rl.nlcd2022
+rl.nlcd.devHigh[] <- ifelse(rl.nlcd.devHigh[] %in% c(82, 123:124), 1,0)
+
+plot(rl.nlcd.devHigh)
+plot(sf.kansas, add= T, col = NA, lwd = 4)
+
+df.bpen.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bimp,buffer=2000), mean))
+df.bgris.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bgris,buffer=2000), mean))
+df.bfrat.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bfrat,buffer=2000), mean))
+df.BPEN.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BPEN,buffer=2000), mean))
+df.BIMP.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BIMP,buffer=2000), mean))
+df.BGRIS.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BGRIS,buffer=2000), mean))
+df.BFRAT.pa$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BFRAT,buffer=2000), mean))
+
+pres.bpen$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bpen1,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+pres.bimp$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bimp1,buffer=2000), mean))
+pres.bgris$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bgris1,buffer=2000), mean))
+pres.bfrat$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.bfrat1,buffer=2000), mean))
+pres.BPEN$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BPEN1,buffer=2000), mean))
+pres.BIMP$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BIMP1,buffer=2000), mean))
+pres.BGRIS$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BGRIS1,buffer=2000), mean))
+pres.BFRAT$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh,pts.sample.BFRAT1,buffer=2000), mean))
+rand$devHigh.perc <- unlist(lapply(raster::extract(rl.nlcd.devHigh, pts.sample.rand, buffer=2000), mean))
+
+# Assign 1 to developed (open, low) land cover categories
+rl.nlcd.devLow <- rl.nlcd2022
+rl.nlcd.devLow[] <- ifelse(rl.nlcd.devLow[] %in% c(82, 121:122), 1,0)
+
+plot(rl.nlcd.devHigh)
+plot(sf.kansas, add= T, col = NA, lwd = 4)
+
+df.bpen.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bimp,buffer=2000), mean))
+df.bgris.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bgris,buffer=2000), mean))
+df.bfrat.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bfrat,buffer=2000), mean))
+df.BPEN.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BPEN,buffer=2000), mean))
+df.BIMP.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BIMP,buffer=2000), mean))
+df.BGRIS.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BGRIS,buffer=2000), mean))
+df.BFRAT.pa$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BFRAT,buffer=2000), mean))
+
+pres.bpen$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bpen1,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+pres.bimp$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bimp1,buffer=2000), mean))
+pres.bgris$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bgris1,buffer=2000), mean))
+pres.bfrat$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.bfrat1,buffer=2000), mean))
+pres.BPEN$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BPEN1,buffer=2000), mean))
+pres.BIMP$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BIMP1,buffer=2000), mean))
+pres.BGRIS$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BGRIS1,buffer=2000), mean))
+pres.BFRAT$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow,pts.sample.BFRAT1,buffer=2000), mean))
+rand$devLow.perc <- unlist(lapply(raster::extract(rl.nlcd.devLow, pts.sample.rand, buffer=2000), mean))
+
+
+# Assign 1 to water/wetland land categories
+rl.nlcd.wet <- rl.nlcd2022
+rl.nlcd.wet[] <- ifelse(rl.nlcd.wet[] %in% c(83, 87, 92, 111, 129, 190), 1,0)
+
+plot(rl.nlcd.wet)
+plot(sf.kansas, add= T, col = NA, lwd = 4)
+
+df.bpen.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bimp,buffer=2000), mean))
+df.bgris.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bgris,buffer=2000), mean))
+df.bfrat.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bfrat,buffer=2000), mean))
+df.BPEN.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BPEN,buffer=2000), mean))
+df.BIMP.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BIMP,buffer=2000), mean))
+df.BGRIS.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BGRIS,buffer=2000), mean))
+df.BFRAT.pa$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BFRAT,buffer=2000), mean))
+
+pres.bpen$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bpen1,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+pres.bimp$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bimp1,buffer=2000), mean))
+pres.bgris$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bgris1,buffer=2000), mean))
+pres.bfrat$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.bfrat1,buffer=2000), mean))
+pres.BPEN$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BPEN1,buffer=2000), mean))
+pres.BIMP$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BIMP1,buffer=2000), mean))
+pres.BGRIS$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BGRIS1,buffer=2000), mean))
+pres.BFRAT$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.sample.BFRAT1,buffer=2000), mean))
+rand$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet, pts.sample.rand, buffer=2000), mean))
+
+
+# Assign 1 to forest/shrubland land categories
+rl.nlcd.wood <- rl.nlcd2022
+rl.nlcd.wood[] <- ifelse(rl.nlcd.wood[] %in% c(63:64,141:143, 152), 1,0)
+
+plot(rl.nlcd.wood)
+plot(sf.kansas, add= T, col = NA, lwd = 4)
+
+df.bpen.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bimp,buffer=2000), mean))
+df.bgris.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bgris,buffer=2000), mean))
+df.bfrat.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bfrat,buffer=2000), mean))
+df.BPEN.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BPEN,buffer=2000), mean))
+df.BIMP.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BIMP,buffer=2000), mean))
+df.BGRIS.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BGRIS,buffer=2000), mean))
+df.BFRAT.pa$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BFRAT,buffer=2000), mean))
+
+pres.bpen$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bpen1,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+pres.bimp$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bimp1,buffer=2000), mean))
+pres.bgris$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bgris1,buffer=2000), mean))
+pres.bfrat$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.bfrat1,buffer=2000), mean))
+pres.BPEN$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BPEN1,buffer=2000), mean))
+pres.BIMP$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BIMP1,buffer=2000), mean))
+pres.BGRIS$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BGRIS1,buffer=2000), mean))
+pres.BFRAT$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.sample.BFRAT1,buffer=2000), mean))
+rand$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood, pts.sample.rand, buffer=2000), mean))
+
+
+# Assign 1 to agriculture land categories
+rl.nlcd.ag <- rl.nlcd2022
+rl.nlcd.ag[] <- ifelse(rl.nlcd.ag[] %in% c(1:60,66:77,204:254), 1,0)
+
+plot(rl.nlcd.ag)
+plot(sf.kansas, add= T, col = NA, lwd = 4)
+
+df.bpen.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bpen,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+df.bimp.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bimp,buffer=2000), mean))
+df.bgris.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bgris,buffer=2000), mean))
+df.bfrat.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bfrat,buffer=2000), mean))
+df.BPEN.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BPEN,buffer=2000), mean))
+df.BIMP.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BIMP,buffer=2000), mean))
+df.BGRIS.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BGRIS,buffer=2000), mean))
+df.BFRAT.pa$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BFRAT,buffer=2000), mean))
+
+pres.bpen$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bpen1,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+pres.bimp$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bimp1,buffer=2000), mean))
+pres.bgris$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bgris1,buffer=2000), mean))
+pres.bfrat$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.bfrat1,buffer=2000), mean))
+pres.BPEN$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BPEN1,buffer=2000), mean))
+pres.BIMP$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BIMP1,buffer=2000), mean))
+pres.BGRIS$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BGRIS1,buffer=2000), mean))
+pres.BFRAT$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.sample.BFRAT1,buffer=2000), mean))
+rand$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag, pts.sample.rand, buffer=2000), mean))
+
+#Inspect presence-only land cover distribution
+bp1 <- pres.bpen %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+bp.bpen <- ggplot() +
+  geom_boxplot(data = bp1, aes(x = land.cover, y = value), fill = "tomato") +
+  ggtitle("Land cover distribution from buffer extract of BPEN occurrences") +
+  theme_minimal()
+  
+bp2 <- pres.bimp %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+bp.bimp <- ggplot() +
+  geom_boxplot(data = bp2, aes(x = land.cover, y = value), fill = "steelblue") +
+  ggtitle("Land cover distribution from buffer extract of BIMP occurrences") +
+  theme_minimal()
+
+bp3 <- pres.bgris %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+ggplot() +
+  geom_boxplot(data = bp3, aes(x = land.cover, y = value)) +
+  ggtitle("Land cover distribution from buffer extract of BGRIS occurrences")
+
+bp4 <- pres.bfrat %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+ggplot() +
+  geom_boxplot(data = bp4, aes(x = land.cover, y = value)) +
+  ggtitle("Land cover distribution from buffer extract of BGRIS occurrences")
+
+bp5 <- pres.BPEN %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+bp.BPEN <- ggplot() +
+  geom_boxplot(data = bp5, aes(x = land.cover, y = value), color = "tomato") +
+  ggtitle("Land cover distribution from buffer extract of BPEN surveys") +
+  theme_minimal()
+
+bp6 <- pres.BIMP %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+bp.BIMP <- ggplot() +
+  geom_boxplot(data = bp6, aes(x = land.cover, y = value), color = "steelblue") +
+  ggtitle("Land cover distribution from buffer extract of BIMP surveys") +
+  theme_minimal()
+
+bp7 <- pres.BGRIS %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+ggplot() +
+  geom_boxplot(data = bp7, aes(x = land.cover, y = value)) +
+  ggtitle("Land cover distribution from buffer extract of BGRIS surveys")
+
+bp8 <- pres.BFRAT %>%
+  select(grass.perc, devHigh.perc, devLow.perc, wet.perc, wood.perc, ag.perc) %>%
+  pivot_longer(., cols = grass.perc:ag.perc, names_to = "land.cover")
+ggplot() +
+  geom_boxplot(data = bp8, aes(x = land.cover, y = value)) +
+  ggtitle("Land cover distribution from buffer extract of BFRAT surveys")
+
+
+# Save rasters for each land use category
+writeRaster(rl.nlcd.ag, "rl.cdl.ag.22.tif")
+writeRaster(rl.nlcd.dev, "rl.cdl.dev.22.tif")
+writeRaster(rl.nlcd.grass, "rl.cdl.grass.22.tif")
+writeRaster(rl.nlcd.wet, "rl.cdl.wet.22.tif")
+writeRaster(rl.nlcd.wood, "rl.cdl.wood.22.tif")
+
+```
+
+
+### Climate Records
+```{r}
+# Precip
+pres.bpen$precip <- unlist(lapply(raster::extract(precip, pts.sample.bpen1, buffer = 2000), mean))
+pres.bimp$precip <- unlist(lapply(raster::extract(precip, pts.sample.bimp1, buffer = 2000), mean))
+pres.bgris$precip <- unlist(lapply(raster::extract(precip, pts.sample.bgris1, buffer = 2000), mean))
+pres.bfrat$precip <- unlist(lapply(raster::extract(precip, pts.sample.bfrat1, buffer = 2000), mean))
+pres.BPEN$precip <- unlist(lapply(raster::extract(precip, pts.sample.BPEN1, buffer = 2000), mean))
+pres.BIMP$precip <- unlist(lapply(raster::extract(precip, pts.sample.BIMP1, buffer = 2000), mean))
+pres.BGRIS$precip <- unlist(lapply(raster::extract(precip, pts.sample.BGRIS1, buffer = 2000), mean))
+pres.BFRAT$precip <- unlist(lapply(raster::extract(precip, pts.sample.BFRAT1, buffer = 2000), mean))
+rand$precip <- unlist(lapply(raster::extract(precip, pts.sample.rand, buffer = 2000), mean))
+
+
+# Maximum temp
+pres.bpen$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.bpen1, buffer = 2000), mean))
+pres.bimp$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.bimp1, buffer = 2000), mean))
+pres.bgris$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.bgris1, buffer = 2000), mean))
+pres.bfrat$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.bfrat1, buffer = 2000), mean))
+pres.BPEN$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.BPEN1, buffer = 2000), mean))
+pres.BIMP$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.BIMP1, buffer = 2000), mean))
+pres.BGRIS$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.BGRIS1, buffer = 2000), mean))
+pres.BFRAT$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.BFRAT1, buffer = 2000), mean))
+rand$tmax <- unlist(lapply(raster::extract(tmax, pts.sample.rand, buffer = 2000), mean))
+
+# Minimum temp
+pres.bpen$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.bpen1, buffer = 2000), mean))
+pres.bimp$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.bimp1, buffer = 2000), mean))
+pres.bgris$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.bgris1, buffer = 2000), mean))
+pres.bfrat$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.bfrat1, buffer = 2000), mean))
+pres.BPEN$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.BPEN1, buffer = 2000), mean))
+pres.BIMP$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.BIMP1, buffer = 2000), mean))
+pres.BGRIS$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.BGRIS1, buffer = 2000), mean))
+pres.BFRAT$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.BFRAT1, buffer = 2000), mean))
+rand$tmin <- unlist(lapply(raster::extract(tmin, pts.sample.rand, buffer = 2000), mean))
+
+# Annual mean temp
+pres.bpen$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.bpen1, buffer = 2000), mean))
+pres.bimp$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.bimp1, buffer = 2000), mean))
+pres.bgris$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.bgris1, buffer = 2000), mean))
+pres.bfrat$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.bfrat1, buffer = 2000), mean))
+pres.BPEN$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.BPEN1, buffer = 2000), mean))
+pres.BIMP$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.BIMP1, buffer = 2000), mean))
+pres.BGRIS$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.BGRIS1, buffer = 2000), mean))
+pres.BFRAT$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.BFRAT1, buffer = 2000), mean))
+rand$tmean <- unlist(lapply(raster::extract(tmean, pts.sample.rand, buffer = 2000), mean))
+```
+
+
+### Final datasets
+In this secion, we join bumble bee records and covariates
+```{r}
+## Bind pres & rand datasets
+df.bpen.final <- rbind(pres.bpen, rand)
+df.bimp.final <- rbind(pres.bimp, rand)
+df.bgris.final <- rbind(pres.bgris, rand)
+df.bfrat.final <- rbind(pres.bfrat, rand)
+df.BPEN.final <- rbind(pres.BPEN, rand)
+df.BIMP.final <- rbind(pres.BIMP, rand)
+df.BGRIS.final <- rbind(pres.BGRIS, rand)
+df.BFRAT.final <- rbind(pres.BFRAT, rand)
+
+
+write.csv(df.bpen.final, file = "df.bpen.final.csv")
+write.csv(df.bimp.final, file = "df.bimp.final.csv")
+write.csv(df.bgris.final, file = "df.bgris.final.csv")
+write.csv(df.bfrat.final, file = "df.bfrat.final.csv")
+write.csv(df.BPEN.final, file = "df.BPEN.final.csv")
+write.csv(df.BIMP.final, file = "df.BIMP.final.csv")
+write.csv(df.BGRIS.final, file = "df.BGRIS.final.csv")
+write.csv(df.BFRAT.final, file = "df.BFRAT.final.csv")
+
+
+```
+
+
+### Model-fitting {.tabset}
+
+## The Data
+
+```{r}
+#read in datasets
+df.bpen.final <- read.csv("df.bpen.final.csv")
+df.bimp.final <- read.csv("df.bimp.final.csv")
+df.bgris.final <- read.csv("df.bgris.final.csv")
+df.bfrat.final <- read.csv("df.bfrat.final.csv")
+
+df.BPEN.final <- read.csv("df.bpen.bba.final.csv")
+df.BIMP.final <- read.csv("df.bimp.bba.final.csv")
+df.BGRIS.final <- read.csv("df.bgris.final.csv")
+df.BFRAT.final <- read.csv("df.bfrat.final.csv")
+
+```
+
+
+## The Models
+
+```{r}
+
+# GLMs
+m1.bpen <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.bpen.final$pa),
+               data = df.bpen.final)
+
+m1.bimp <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.bimp.final$pa),
+               data = df.bimp.final)
+
+m1.bgris <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.gris.final$pa),
+               data = df.gris.final)
+
+m1.bfrat <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.bfrat.final$pa),
+               data = df.bfrat.final)
+
+m1.BPEN <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.BPEN.final$pa),
+               data = df.BPEN.final)
+
+m1.BIMP <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.BIMP.final$pa),
+               data = df.BIMP.final)
+
+m1.BGRIS <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.BGRIS.final$pa),
+               data = df.BGRIS.final)
+
+m1.BFRAT <- glm(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+                family = poisson(link = "log"),
+                weights = 100^(1-df.BFRAT.final$pa),
+                data = df.BFRAT.final)
+
+
+# GAMs
+m2.bpen <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.bpen.final$pa),
+               data = df.bpen.final)
+
+m2.bimp <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.bimp.final$pa),
+               data = df.bimp.final)
+
+m2.bgris <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+                family = poisson(link = "log"),
+                weights = 100^(1-df.bgris.final$pa),
+                data = df.bgris.final)
+
+m2.bfrat <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+                family = poisson(link = "log"),
+                weights = 100^(1-df.bfrat.final$pa),
+                data = df.bfrat.final)
+
+m2.BPEN <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.BPEN.final$pa),
+               data = df.BPEN.final)
+
+m2.BIMP <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+               family = poisson(link = "log"),
+               weights = 100^(1-df.BIMP.final$pa),
+               data = df.BIMP.final)
+
+m2.BGRIS <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+                family = poisson(link = "log"),
+                weights = 100^(1-df.BGRIS.final$pa),
+                data = df.BGRIS.final)
+
+m2.BFRAT <- gam(pa ~ grass.perc + devLow.perc + devHigh.perc + ag.perc + wet.perc + wood.perc + tmin + tmax + tmean + precip,
+                family = poisson(link = "log"),
+                weights = 100^(1-df.BFRAT.final$pa),
+                data = df.BFRAT.final)
+
+```
+
+### Summary statistics
+
+```{r}
+# Summary tables
+summary(m2.bpen) #grass = +
+confint.default(m2.bpen) #sig = devLow, devHigh, wet, wood, precip
+
+summary(m2.BPEN) #grass = +
+confint.default(m2.BPEN) #sig = devLow, devHigh, ag.perc(-), wet.perc
+
+summary(m2.bimp) #grass = +
+confint.default(m2.bimp) #sig = devLow, devHigh, wet, wood, tmin, tmax, tmean(-), precip
+
+summary(m2.BIMP) #grass = +
+confint.default(m2.BIMP) #sig = devHigh, wood, tmin, tmax, tmean(-), precip
+
+
+# Create tables & graphs
+library(tinytable)
+library(modelsummary)
+
+models <- list(
+  "bpen.gbif" = m2.bpen,
+  "bpen.atlas" = m2.BPEN,
+  "bimp.gbif" = m2.bimp,
+  "bimp.atlas" = m2.BIMP
+)
+
+summary <- modelsummary(models,
+             estimate = "{estimate}{stars}",
+             statistic = "[{conf.low}, {conf.high}]")
+summary
+
+bpen.mods <- models[1:2]
+modelplot(bpen.mods, coef_omit = "Intercept")
+```
+
+
+## Mapping predictions
+```{r}
+library(spatstat)
+
+# Create predictions for each observation and assign to new column
+df.bpen.final$pred <- c(predict(m2.bpen, newdata = df.bpen.final,
+                             type = "response"))
+df.bimp.final$pred <- c(predict(m2.bimp, newdata = df.bimp.final,
+                                type = "response"))
+df.bgris.final$pred <- c(predict(m2.bgris, newdata = df.bgris.final,
+                                type = "response"))
+df.bfrat.final$pred <- c(predict(m2.bfrat, newdata = df.bfrat.final,
+                                type = "response"))
+df.BPEN.final$pred <- c(predict(m2.BPEN, newdata = df.BPEN.final,
+                                type = "response"))
+df.BIMP.final$pred <- c(predict(m2.BIMP, newdata = df.BIMP.final,
+                                type = "response"))
+df.BGRIS.final$pred <- c(predict(m2.BGRIS, newdata = df.BGRIS.final,
+                                type = "response"))
+df.BFRAT.final$pred <- c(predict(m2.BFRAT, newdata = df.BFRAT.final,
+                                type = "response"))
+
+# Filter to presence-only records (to display on)
+df.bpen.pres <- df.bpen.final %>%
+  filter(pa == "1")
+
+df.bimp.pres <- df.bimp.final %>%
+  filter(pa == "1")
+
+df.BPEN.pres <- df.BPEN.final %>%
+  filter(pa == "1")
+
+df.BIMP.pres <- df.BIMP.final %>%
+  filter(pa == "1")
+
+# Convert from df to sf
+sf.pred.bpen <- st_as_sf(df.bpen.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.bimp <- st_as_sf(df.bimp.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.bgris <- st_as_sf(df.bgris.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.bfrat <- st_as_sf(df.bfrat.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.BPEN <- st_as_sf(df.BPEN.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.BIMP <- st_as_sf(df.BIMP.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.BGRIS <- st_as_sf(df.BGRIS.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.BFRAT <- st_as_sf(df.BFRAT.final, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+
+sf.pred.bpen.p <- st_as_sf(df.bpen.pres, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.bimp.p <- st_as_sf(df.bimp.pres, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.BPEN.p <- st_as_sf(df.BPEN.pres, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+sf.pred.BIMP.p <- st_as_sf(df.BIMP.pres, coords = c("X", "Y"), crs = "+proj=longlat +datum=WGS84 +no_defs +type=crs")
+
+
+#project to Albers Equal Area Conic
+sf.pred.bpen <- st_transform(sf.pred.bpen, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.bimp <- st_transform(sf.pred.bimp, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.bgris <- st_transform(sf.pred.bgris, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.bfrat <- st_transform(sf.pred.bfrat, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.BPEN <- st_transform(sf.pred.BPEN, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.BIMP <- st_transform(sf.pred.BIMP, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.BGRIS <- st_transform(sf.pred.BGRIS, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.BFRAT <- st_transform(sf.pred.BFRAT, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+
+
+sf.pred.bpen.p <- st_transform(sf.pred.bpen.p, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.bimp.p <- st_transform(sf.pred.bimp.p, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.BPEN.p <- st_transform(sf.pred.BPEN.p, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.pred.BIMP.p <- st_transform(sf.pred.BIMP.p, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+sf.ks.boundary <- st_transform(sf.ks.boundary, crs = "+proj=aea +lat_0=37.5 +lon_0=-96 +lat_1=29.5 +lat_2=45.5 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs")
+
+#Create window from kansas boundary shapefile
+ks.ow <- as.owin(sf.ks.boundary$geometry)
+
+#convert to ppp
+ppp.pred.bpen <- as.ppp(sf.pred.bpen)
+marks(ppp.pred.bpen) <- sf.pred.bpen
+ppp.pred.bpen <- ppp.pred.bpen[ks.ow]
+
+ppp.pred.bimp <- as.ppp(sf.pred.bimp)
+marks(ppp.pred.bimp) <- sf.pred.bimp
+ppp.pred.bimp <- ppp.pred.bimp[ks.ow]
+
+ppp.pred.bgris <- as.ppp(sf.pred.bgris)
+marks(ppp.pred.bgris) <- sf.pred.bgris
+ppp.pred.bgris <- ppp.pred.bgris[ks.ow]
+
+ppp.pred.bfrat <- as.ppp(sf.pred.bfrat)
+marks(ppp.pred.bfrat) <- sf.pred.bfrat
+ppp.pred.bfrat <- ppp.pred.bfrat[ks.ow]
+
+
+ppp.pred.BPEN <- as.ppp(sf.pred.BPEN)
+marks(ppp.pred.BPEN) <- sf.pred.BPEN
+ppp.pred.BPEN <- ppp.pred.BPEN[ks.ow]
+
+
+ppp.pred.BIMP <- as.ppp(sf.pred.BIMP)
+marks(ppp.pred.BIMP) <- sf.pred.BIMP
+ppp.pred.BIMP <- ppp.pred.BIMP[ks.ow]
+
+
+ppp.pred.BGRIS <- as.ppp(sf.pred.BGRIS)
+marks(ppp.pred.BGRIS) <- sf.pred.BGRIS
+ppp.pred.BGRIS <- ppp.pred.BGRIS[ks.ow]
+
+
+ppp.pred.BFRAT <- as.ppp(sf.pred.BFRAT)
+marks(ppp.pred.BFRAT) <- sf.pred.BFRAT
+ppp.pred.BFRAT <- ppp.pred.BFRAT[ks.ow]
+
+
+#Plotting
+color <- colorRampPalette(rev(brewer.pal(11, "Spectral"))[-1],
+                          bias = 1.5)
+
+## From  occurrence records
+p.bpen <- plot(density(ppp.pred.bpen, which.marks = "pred"), col = color,
+     main = "Density plot of model-predicted probability of occurrence (intensity) \n for Bombus pensylvanicus (from occurrence records)")
+plot(sf.pred.bpen.p, add = T, col = "black")
+
+p.bimp <- plot(density(ppp.pred.bimp, which.marks = "pred"), col = color,
+     main = "Density plot of model-predicted probability of occurrence (intensity) \n for Bombus impatiens (from occurrence records)")
+plot(sf.pred.bpen.p, add = T, col = "black")
+
+
+## From survey records
+p.BPEN <- plot(density(ppp.pred.BPEN, which.marks = "pred"), col = color,
+     main = "Density plot of model-predicted probability of occurrence (intensity) \n for Bombus pensylvanicus (from survey records")
+plot(sf.pred.bpen.p, add = T, col = "black")
+
+p.BIMP <- plot(density(ppp.pred.BIMP, which.marks = "pred"), col = color,
+     main = "Density plot of model-predicted probability of occurrence (intensity) \n for Bombus impatiens (from survey records)")
+plot(sf.pred.bpen.p, add = T, col = "black")
+
+
+## Plots joined
+
+par(mfrow = c(2,2))
+plot(density(ppp.pred.bpen, which.marks = "pred"), col = color,
+     main = "Bombus pensylvanicus \n(from occurrence records)")
+points(sf.pred.bpen.p, col = "black", cex = 0.5)
+p.bimp <- plot(density(ppp.pred.bimp, which.marks = "pred"), col = color,
+     main = "Bombus impatiens \n(from occurrence records)")
+points(sf.pred.bpen.p, col = "black", cex = 0.5)
+plot(density(ppp.pred.BPEN, which.marks = "pred"), col = color,
+     main = "Bombus pensylvanicus \n(from survey records")
+points(sf.pred.bpen.p, col = "black", cex = 0.5)
+plot(density(ppp.pred.BIMP, which.marks = "pred"), col = color,
+     main = "Bombus impatiens \n(from survey records)")
+points(sf.pred.bpen.p, col = "black", cex = 0.5)
+
+
+```
+
