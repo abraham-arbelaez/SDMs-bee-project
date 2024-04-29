@@ -285,156 +285,190 @@ df.bimp.final$wet.perc <- df.bimp.final$wet.perc*.01
 df.bimp.final$wood.perc <- df.bimp.final$wood.perc*.01 
 df.bimp.final$ag.perc <- df.bimp.final$ag.perc*.01 
 
-#write.csv(df.bimp.final, file = "bimp.csv")
-#write.csv(df.bpen.final, file = "bpen.csv")
 
-#### FOLLOWING PACKAGE
 
-library(ppmData)
+######## DOVERS ET AL 2024 ----
 
-?ppmData
+set.seed(420)
+sf.us <- st_read("cb_2015_us_state_20m.shp",quiet = TRUE)
+sf.kansas <- sf.us[48,6] # filter to KS
+sf.kansas <- as(sf.kansas, 'Spatial') #rese
+quad <- spsample(sf.kansas, n = 3000, type = "random")
+plot(quad)
 
-library(ppmData)
-path <- system.file("extdata", package = "ppmData")
-lst <- list.files(path=path, pattern='*.tif',full.names = TRUE)
-covariates <- rast(lst)
-presences <- subset(snails,SpeciesID %in% "Tasmaphena sinclairi")
-npoints <- 1000
-ppmdata1 <- ppmData(npoints = npoints, presences=presences,
-                    window = covariates[[1]], covariates=covariates)
 
+bimp <- st_as_sf(df.bimp.final, coords = c("X","Y"))
 
-plot(ppmdata1)
+plot(sf.kansas)
+plot(quad, add = T)
+plot(bimp$geometry, pch = 3, col = "red", add = T)
 
-ppp <- ppmdata1$ppmData
-form  <- presence/weights ~ poly(annual_mean_precip, degree = 2) + 
-  poly(annual_mean_temp, degree = 2) + 
-  poly(distance_from_main_roads, degree = 2)
 
-ft.ppm <- glm(formula = form, data = ppp,
-              weights = as.numeric(ppp$weights),
-              family = poisson())
+## getting vars for quad ----
+# Make SpatialPoints data frame
+df.quad <- data.frame(long = coordinates(quad)[,1],lat = coordinates(quad)[,2])
+quad.bimp <- data.frame(long = coordinates(quad)[,1],lat = coordinates(quad)[,2])
+coordinates(quad.bimp) =~ long + lat
+proj4string(quad.bimp) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
 
-pred <- predict(covariates,
-                ft.ppm,
-                type="response")
-plot(pred*prod(res(pred))) # scale response by area of cell.
-points(presences[!duplicated(presences),1:2],pch=16,cex=0.75,col=gray(0.2,0.75))
 
+# Grass percentage
+df.quad$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,quad.bimp,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
-bimp <- df.bimp.final
-names(bimp)[3] <- paste("SpeciesID") 
-bimp$SpeciesID[1:171] <- "Bombus Pennsylvanicus"
+# Dev percentage
+df.quad$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,quad.bimp,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
-window.ks <- rast(rl.nlcd2022)
-class(window.ks)
+# Wet percentage
+df.quad$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,quad.bimp,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
-ag.ks <- rast(rl.nlcd.ag)
-dev.ks <- rast(rl.nlcd.dev)
-grass.ks <- rast(rl.nlcd.grass)
-wet.ks <- rast(rl.nlcd.wet)
-wood.ks <- rast(rl.nlcd.wood)
+# Wood percentage
+df.quad$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,quad.bimp,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Ag percentage
+df.quad$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,quad.bimp,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Precip
+df.quad$precip <- unlist(lapply(raster::extract(precip,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Maximum temp
+df.quad$tmax <- unlist(lapply(raster::extract(tmax,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
-lst <- list()
+# Minimum temp
+df.quad$tmin <- unlist(lapply(raster::extract(tmin,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
-library(ppmData)
-path <- system.file("extdata", package = "ppmData")
-lst <- list.files(path=path, pattern='*.tif',full.names = TRUE)
-covariates <- df.bimp.final[,4:12]
-presences <- df.bimp.final[,c(1:3)]
-npoints <- 1000
-ppmdata1 <- ppmData(npoints = npoints, presences=presences,
-                    window = window.ks, covariates=covariates)
+# Annual mean temp
+df.quad$tmean <- unlist(lapply(raster::extract(tmean,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+df.quad$grass.perc <- df.quad$grass.perc*.01 
+df.quad$dev.perc <- df.quad$dev.perc*.01 
+df.quad$wet.perc <- df.quad$wet.perc*.01 
+df.quad$wood.perc <- df.quad$wood.perc*.01 
+df.quad$ag.perc <- df.quad$ag.perc*.01 
 
-plot(ppmdata1)
+# presence column
+df.quad$pa <- rep(0, length(df.quad$grass.perc))
 
-ppp <- ppmdata1$ppmData
-form  <- presence/weights ~ poly(annual_mean_precip, degree = 2) + 
-  poly(annual_mean_temp, degree = 2) + 
-  poly(distance_from_main_roads, degree = 2)
+colnames(df.quad) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
 
-ft.ppm <- glm(formula = form, data = ppp,
-              weights = as.numeric(ppp$weights),
-              family = poisson())
+df.bimp.ipp <- rbind(df.bimp.final, df.quad)
 
-pred <- predict(covariates,
-                ft.ppm,
-                type="response")
-plot(pred*prod(res(pred))) # scale response by area of cell.
-points(presences[!duplicated(presences),1:2],pch=16,cex=0.75,col=gray(0.2,0.75))
+bimp.ipp <- st_as_sf(df.bimp.ipp, coords = c("X","Y"))
 
 
 
+# model
+wt <- 1e-4
+df.bimp.ipp$wt <- wt
 
+f1 <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
 
+ipp <- glm(f1, data = df.bimp.ipp, family = poisson, weights = wt)
 
+summary(ipp)
 
 
+library(mgcv)
 
+f2 <- update(f1, ~ . + s(X,Y, bs = "gp", k = 200))
 
+ipp <- gam(f2, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
 
+summary(ipp)
 
 
+f3 <- update(f2, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
 
+ipp <- gam(f3, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
 
+summary(ipp)
 
 
+f4 <- update(f3, ~ . + s(X,Y, bs = "gp", k = 200) - tmax) 
 
+ipp <- gam(f4, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
 
+summary(ipp)
 
 
+f5 <- update(f4, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
 
+ipp <- gam(f5, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
 
+summary(ipp)
 
 
+f6 <- update(f5, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
 
+ipp <- gam(f6, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
 
+summary(ipp)
 
 
+f7 <- update(f6, ~ . + s(X,Y, bs = "gp", k = 200) - wet.perc) 
 
+ipp <- gam(f7, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
 
+summary(ipp)
 
+df.bimp.ipp$pred <- c(predict(ipp, newdata = df.bimp.ipp,
+                                type = "response"))
 
+rl.E.y <- raster(,nrow=200,ncols=200,ext=extent(sf.kansas),crs=crs(sf.kansas))
+df.pred <- data.frame(long = xyFromCell(rl.E.y,cell=1:length(rl.E.y[]))[,1],
+                      lat = xyFromCell(rl.E.y,cell=1:length(rl.E.y[]))[,2])
 
+pred.grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Dev percentage
+pred.dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Wet percentage
+pred.wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Wood percentage
+pred.wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Ag percentage
+pred.ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Precip
+pred.precip <- unlist(lapply(raster::extract(precip,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Maximum temp
+pred.tmax <- unlist(lapply(raster::extract(tmax,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Minimum temp
+pred.tmin <- unlist(lapply(raster::extract(tmin,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+# Annual mean temp
+pred.tmean <- unlist(lapply(raster::extract(tmean,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
 
+df.pred$dev.perc <- pred.dev.perc
+df.pred$wood.perc <- pred.wood.perc
+df.pred$ag.perc <- pred.ag.perc
+df.pred$tmean <- pred.tmean
 
+df.pred$dev.perc <- df.pred$dev.perc*.01 
+df.pred$wood.perc <- df.pred$wood.perc*.01 
+df.pred$ag.perc <- df.pred$ag.perc*.01 
 
+colnames(df.pred) <- c("X","Y","dev.perc", "wood.perc", "ag.perc", "tmean")
 
+rl.E.y[] <- exp(c(predict(ipp,newdata=df.pred,type="link")))
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+points(pts.sample.bimp, pch = 16)
 
 
 
