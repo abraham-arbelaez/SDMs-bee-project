@@ -1,0 +1,1325 @@
+---
+title: "Tutorial_final"
+author: "Dani Holthaus"
+date: "2024-04-30"
+output: html_document
+---
+
+#### START OF COMBINED ANALYSIS ####
+
+# Load the packages
+```{r}
+library(pacman)
+p_load(sf,sp,raster,mgcv,plotrix,gstat,tidyverse,terra,geodata,predicts, RColorBrewer)
+```
+
+
+# Load the datasets
+```{r}
+#Assign CRS objects
+wgs84 <- "+proj=longlat +datum=WGS84 +no_defs +type=crs"
+albers <- "+proj=aea +lat_0=40 +lon_0=-96 +lat_1=20 +lat_2=60 +x_0=0 +y_0=0 +datum=NAD83 +units=m +no_defs +type=crs"
+
+# Download bpen & bimp occurence dataset
+df1 <- read.csv("https://raw.githubusercontent.com/abraham-arbelaez/SDMs-bee-project/main/BBOccurenceRecords_Verified_KS.csv")
+df1.bpen <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus pensylvanicus (De Geer, 1773)") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)# Keep only the data on current bpen records (2020-2023)
+
+df1.bimp <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus impatiens Cresson, 1863") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)
+
+df1.bgris <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus griseocollis (De Geer, 1773)") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)
+
+df1.bfrat <- df1 %>%
+  filter(YearObserved %in% c("2020", "2021", "2022", "2023")) %>%
+  filter(ScientificName == "Bombus fraternus (Smith, 1854)") %>%
+  dplyr::select(ID, YearObserved, Latitude, Longitude)
+
+
+# Download great plains bumble bee atlas survey dataset (filter to gpbba only & target species)
+df1.bba <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/BBW_KansasRecords_5April2024_Holthaus_KState.csv")
+
+df1.bba.total <- df1.bba %>%
+  filter(datasetID %in% c("Great Plains Bumble Bee Atlas", "Bumble Bee Atlas", 
+                          "Nebraska Bumble Bee Atlas", "Missouri Bumble Bee Atlas"))
+df1.BPEN <- df1.bba.total %>%
+  filter(vernacularName == "American bumble bee")
+df1.BIMP <- df1.bba.total %>%
+  filter(vernacularName == "Common eastern bumble bee")
+df1.BGRIS <- df1.bba.total %>%
+  filter(vernacularName == "Brown-belted bumble bee")
+df1.BFRAT <- df1.bba.total %>%
+  filter(vernacularName == "Southern plains bumble bee")
+
+
+# Download KS boundary shapefile
+sf.us <- st_read("cb_2015_us_state_20m.shp",quiet = TRUE)
+sf.kansas <- sf.us[48,6] # filter to KS
+sf.kansas <- as(sf.kansas, 'Spatial') #rese
+
+
+# Download PRISM climate data (monthly, annual values, 4km resolution)
+precip <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/prism/PRISM_ppt_stable_4kmM3_2022_bil.bil")
+tmax <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/prism/PRISM_tmax_stable_4kmM3_2022_bil.bil")
+tmin <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/prism/PRISM_tmin_stable_4kmM3_2022_bil.bil")
+tmean <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/prism/PRISM_tmean_stable_4kmM3_2022_bil.bil")
+
+precip <- projectRaster(precip, crs = wgs84, method = "bilinear")
+tmax <- projectRaster(tmax, crs = wgs84, method = "bilinear")
+tmin <- projectRaster(tmin, crs = wgs84, method = "bilinear")
+tmean <- projectRaster(tmean, crs = wgs84, method = "bilinear")
+
+# Download land cover raster for 2022 from Cropscape
+rl.nlcd2022 <- raster("CDL_2022_20.tif")
+plot(rl.nlcd2022)
+
+rl.nlcd.ag <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/rl.nlcd.ag.tif")
+rl.nlcd.dev <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/rl.nlcd.dev.tif")
+rl.nlcd.grass <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/rl.nlcd.grass.tif")
+rl.nlcd.wet <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/rl.nlcd.wet.tif")
+rl.nlcd.wood <- raster("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/rl.nlcd.wood.22.tif")
+
+#rl.nlcd2022 <- projectRaster(rl.nlcd2022, crs = wgs84, method = "ngb") #WGS84
+
+
+```
+
+
+# Data Wrangling - Bumble bee records
+```{r}
+# Make XY df
+df.bpen <- data.frame(long = df1.bpen$Longitude, lat = df1.bpen$Latitude) #long, lat (XY); class = df
+df.bimp <- data.frame(long = df1.bimp$Longitude, lat = df1.bimp$Latitude)
+df.bgris <- data.frame(long = df1.bgris$Longitude, lat = df1.bgris$Latitude)
+df.bfrat <- data.frame(long = df1.bfrat$Longitude, lat = df1.bfrat$Latitude)
+df.BPEN <- data.frame(long = df1.BPEN$decimalLongitude, lat = df1.BPEN$decimalLatitude)
+df.BIMP <- data.frame(long = df1.BIMP$decimalLongitude, lat = df1.BIMP$decimalLatitude)
+df.BGRIS <- data.frame(long = df1.BGRIS$decimalLongitude, lat = df1.BGRIS$decimalLatitude)
+df.BFRAT <- data.frame(long = df1.BFRAT$decimalLongitude, lat = df1.BFRAT$decimalLatitude)
+
+# Make SpatialPoints data frame
+pts.bpen <- data.frame(long = df1.bpen$Longitude,lat = df1.bpen$Latitude)
+coordinates(pts.bpen) =~ long + lat
+proj4string(pts.bpen) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.bimp <- data.frame(long = df1.bimp$Longitude, lat = df1.bimp$Latitude)
+coordinates(pts.bimp) =~ long + lat
+proj4string(pts.bimp) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.bgris <- data.frame(long = df1.bgris$Longitude, lat = df1.bgris$Latitude)
+coordinates(pts.bgris) =~ long + lat
+proj4string(pts.bgris) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.bfrat <- data.frame(long = df1.bfrat$Longitude, lat = df1.bfrat$Latitude)
+coordinates(pts.bfrat) =~ long + lat
+proj4string(pts.bfrat) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.BPEN <- data.frame(long = df1.BPEN$decimalLongitude, lat = df1.BPEN$decimalLatitude)
+coordinates(pts.BPEN) =~ long + lat
+proj4string(pts.BPEN) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.BIMP <- data.frame(long = df1.BIMP$decimalLongitude, lat = df1.BIMP$decimalLatitude)
+coordinates(pts.BIMP) =~ long + lat
+proj4string(pts.BIMP) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.BGRIS <- data.frame(long = df1.BGRIS$decimalLongitude, lat = df1.BGRIS$decimalLatitude)
+coordinates(pts.BGRIS) =~ long + lat
+proj4string(pts.BGRIS) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+pts.BFRAT <- data.frame(long = df1.BFRAT$decimalLongitude, lat = df1.BFRAT$decimalLatitude)
+coordinates(pts.BFRAT) =~ long + lat
+proj4string(pts.BFRAT) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0")
+
+
+```
+
+# Data Wrangling -- Create Quadratures
+```{r}
+set.seed(420)
+quad <- spsample(sf.kansas, n = 3000, type = "random")
+plot(quad)
+
+# Make XY df
+df.quad <- data.frame(long = coordinates(quad)[,1],lat = coordinates(quad)[,2]) #long, lat (XY), class = df
+
+# Make SpatialPoints df
+quad.bimp <- data.frame(long = coordinates(quad)[,1],lat = coordinates(quad)[,2])
+coordinates(quad.bimp) =~ long + lat
+proj4string(quad.bimp) <- CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0") #SpatialPoints
+
+```
+
+
+# Data Wrangling -- Land Cover (assign categories)-- SOMETHING WRONG HERE!!!!
+```{r}
+
+# Assign 1 to grassland/pasture land cover categories
+rl.nlcd.grass <- rl.nlcd2022
+rl.nlcd.grass[] <- ifelse(rl.nlcd.grass[]==176,1,0) #0 if not grassland
+
+
+# Assign 1 to developed (all intensities) land cover categories
+rl.nlcd.dev <- rl.nlcd2022
+rl.nlcd.dev[] <- ifelse(rl.nlcd.dev[] %in% c(82, 121:124), 1,0)
+
+
+# Assign 1 to water/wetland land categories
+rl.nlcd.wet <- rl.nlcd2022
+rl.nlcd.wet[] <- ifelse(rl.nlcd.wet[] %in% c(83, 87, 92, 111, 129, 190), 1,0)
+
+
+# Assign 1 to forest/shrubland land categories
+rl.nlcd.wood <- rl.nlcd2022
+rl.nlcd.wood[] <- ifelse(rl.nlcd.wood[] %in% c(63:64,141:143, 152), 1,0)
+
+
+
+# Assign 1 to agriculture land categories
+rl.nlcd.ag <- rl.nlcd2022
+rl.nlcd.ag[] <- ifelse(rl.nlcd.ag[] %in% c(1:60,66:77,204:254), 1,0)
+
+
+### Save new raster layers (for quicker import)
+writeRaster(rl.nlcd.ag, "rl.nlcd.ag.tif")
+writeRaster(rl.nlcd.dev, "rl.nlcd.dev.tif")
+writeRaster(rl.nlcd.grass, "rl.nlcd.grass.22.tif")
+writeRaster(rl.nlcd.wet, "rl.nlcd.wet.tif")
+writeRaster(rl.nlcd.wood, "rl.nlcd.wood.22.tif")
+
+```
+
+
+# Land cover extracts
+```{r}
+# Grass percentage
+df.bpen$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.bpen,buffer=2000),mean))
+df.bimp$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.bimp,buffer=2000),mean))
+df.bgris$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.bgris,buffer=2000),mean))
+df.bfrat$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.bfrat,buffer=2000),mean))
+df.BPEN$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.BPEN,buffer=2000),mean))
+df.BIMP$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.BIMP,buffer=2000),mean))
+df.BGRIS$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,pts.BFRAT,buffer=2000),mean))
+df.quad$grass.perc <- unlist(lapply(raster::extract(rl.nlcd.grass,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Dev percentage
+df.bpen$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.bpen,buffer=2000),mean))
+df.bimp$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.bimp,buffer=2000),mean))
+df.bgris$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.bgris,buffer=2000),mean))
+df.bfrat$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.bfrat,buffer=2000),mean))
+df.BPEN$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.BPEN,buffer=2000),mean))
+df.BIMP$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.BIMP,buffer=2000),mean))
+df.BGRIS$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,pts.BFRAT,buffer=2000),mean))
+df.quad$dev.perc <- unlist(lapply(raster::extract(rl.nlcd.dev,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Wet percentage
+df.bpen$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.bpen,buffer=2000),mean))
+df.bimp$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.bimp,buffer=2000),mean))
+df.bgris$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.bgris,buffer=2000),mean))
+df.bfrat$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.bfrat,buffer=2000),mean))
+df.BPEN$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.BPEN,buffer=2000),mean))
+df.BIMP$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.BIMP,buffer=2000),mean))
+df.BGRIS$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,pts.BFRAT,buffer=2000),mean))
+df.quad$wet.perc <- unlist(lapply(raster::extract(rl.nlcd.wet,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Wood percentage
+df.bpen$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.bpen,buffer=2000),mean))
+df.bimp$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.bimp,buffer=2000),mean))
+df.bgris$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.bgris,buffer=2000),mean))
+df.bfrat$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.bfrat,buffer=2000),mean))
+df.BPEN$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.BPEN,buffer=2000),mean))
+df.BIMP$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.BIMP,buffer=2000),mean))
+df.BGRIS$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,pts.BFRAT,buffer=2000),mean))
+df.quad$wood.perc <- unlist(lapply(raster::extract(rl.nlcd.wood,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Ag percentage
+df.bpen$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.bpen,buffer=2000),mean))
+df.bimp$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.bimp,buffer=2000),mean))
+df.bgris$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.bgris,buffer=2000),mean))
+df.bfrat$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.bfrat,buffer=2000),mean))
+df.BPEN$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.BPEN,buffer=2000),mean))
+df.BIMP$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.BIMP,buffer=2000),mean))
+df.BGRIS$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,pts.BFRAT,buffer=2000),mean))
+df.quad$ag.perc <- unlist(lapply(raster::extract(rl.nlcd.ag,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Precip
+df.bpen$precip <- unlist(lapply(raster::extract(precip,pts.bpen,buffer=2000),mean))
+df.bimp$precip <- unlist(lapply(raster::extract(precip,pts.bimp,buffer=2000),mean))
+df.bgris$precip <- unlist(lapply(raster::extract(precip,pts.bgris,buffer=2000),mean))
+df.bfrat$precip <- unlist(lapply(raster::extract(precip,pts.bfrat,buffer=2000),mean))
+df.BPEN$precip <- unlist(lapply(raster::extract(precip,pts.BPEN,buffer=2000),mean))
+df.BIMP$precip <- unlist(lapply(raster::extract(precip,pts.BIMP,buffer=2000),mean))
+df.BGRIS$precip <- unlist(lapply(raster::extract(precip,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$precip <- unlist(lapply(raster::extract(precip,pts.BFRAT,buffer=2000),mean))
+df.quad$precip <- unlist(lapply(raster::extract(precip,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Maximum temp
+df.bpen$tmax <- unlist(lapply(raster::extract(tmax,pts.bpen,buffer=2000),mean))
+df.bimp$tmax <- unlist(lapply(raster::extract(tmax,pts.bimp,buffer=2000),mean))
+df.bgris$tmax <- unlist(lapply(raster::extract(tmax,pts.bgris,buffer=2000),mean))
+df.bfrat$tmax <- unlist(lapply(raster::extract(tmax,pts.bfrat,buffer=2000),mean))
+df.BPEN$tmax <- unlist(lapply(raster::extract(tmax,pts.BPEN,buffer=2000),mean))
+df.BIMP$tmax <- unlist(lapply(raster::extract(tmax,pts.BIMP,buffer=2000),mean))
+df.BGRIS$tmax <- unlist(lapply(raster::extract(tmax,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$tmax <- unlist(lapply(raster::extract(tmax,pts.BFRAT,buffer=2000),mean))
+df.quad$tmax <- unlist(lapply(raster::extract(tmax,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Minimum temp
+df.bpen$tmin <- unlist(lapply(raster::extract(tmin,pts.bpen,buffer=2000),mean))
+df.bimp$tmin <- unlist(lapply(raster::extract(tmin,pts.bimp,buffer=2000),mean))
+df.bgris$tmin <- unlist(lapply(raster::extract(tmin,pts.bgris,buffer=2000),mean))
+df.bfrat$tmin <- unlist(lapply(raster::extract(tmin,pts.bfrat,buffer=2000),mean))
+df.BPEN$tmin <- unlist(lapply(raster::extract(tmin,pts.BPEN,buffer=2000),mean))
+df.BIMP$tmin <- unlist(lapply(raster::extract(tmin,pts.BIMP,buffer=2000),mean))
+df.BGRIS$tmin <- unlist(lapply(raster::extract(tmin,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$tmin <- unlist(lapply(raster::extract(tmin,pts.BFRAT,buffer=2000),mean))
+df.quad$tmin <- unlist(lapply(raster::extract(tmin,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Annual mean temp
+df.bpen$tmean <- unlist(lapply(raster::extract(tmean,pts.bpen,buffer=2000),mean))
+df.bimp$tmean <- unlist(lapply(raster::extract(tmean,pts.bimp,buffer=2000),mean))
+df.bgris$tmean <- unlist(lapply(raster::extract(tmean,pts.bgris,buffer=2000),mean))
+df.bfrat$tmean <- unlist(lapply(raster::extract(tmean,pts.bfrat,buffer=2000),mean))
+df.BPEN$tmean <- unlist(lapply(raster::extract(tmean,pts.BPEN,buffer=2000),mean))
+df.BIMP$tmean <- unlist(lapply(raster::extract(tmean,pts.BIMP,buffer=2000),mean))
+df.BGRIS$tmean <- unlist(lapply(raster::extract(tmean,pts.BGRIS,buffer=2000),mean))
+df.BFRAT$tmean <- unlist(lapply(raster::extract(tmean,pts.BFRAT,buffer=2000),mean))
+df.quad$tmean <- unlist(lapply(raster::extract(tmean,quad.bimp,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+
+```
+
+
+
+# Make presence column, Join into final dataset
+
+```{r}
+# presence column
+df.bpen$pa <- 1
+df.bimp$pa <- 1
+df.bgris$pa <- 1
+df.bfrat$pa <- 1
+df.BPEN$pa <- 1
+df.BIMP$pa <- 1
+df.BGRIS$pa <- 1
+df.BFRAT$pa <- 1
+df.quad$pa <- rep(0, length(df.quad$grass.perc))
+
+colnames(df.quad) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.bpen) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.bimp) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.bgris) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.bfrat) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.BPEN) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.BIMP) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.BGRIS) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+colnames(df.BFRAT) <- c("X", "Y", "grass.perc", "dev.perc", "wet.perc",
+                       "wood.perc", "ag.perc", "precip", "tmax", "tmin",
+                       "tmean", "pa")
+
+
+
+# Join into final datasets
+df.bpen.ipp <- rbind(df.bpen, df.quad)
+df.bimp.ipp <- rbind(df.bimp, df.quad)
+df.bgris.ipp <- rbind(df.bgris, df.quad)
+df.bfrat.ipp <- rbind(df.bfrat, df.quad)
+df.BPEN.ipp <- rbind(df.BPEN, df.quad)
+df.BIMP.ipp <- rbind(df.BIMP, df.quad)
+df.BGRIS.ipp <- rbind(df.BGRIS, df.quad)
+df.BFRAT.ipp <- rbind(df.BFRAT, df.quad)
+
+# Add weights
+wt <- 1e-4
+df.bpen.ipp$wt <- wt
+df.bimp.ipp$wt <- wt
+df.bgris.ipp$wt <- wt
+df.bfrat.ipp$wt <- wt
+df.BPEN.ipp$wt <- wt
+df.BIMP.ipp$wt <- wt
+df.BGRIS.ipp$wt <- wt
+df.BFRAT.ipp$wt <- wt
+
+
+# Save df for easier use
+write.csv(df.bpen.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bpen.ipp.csv")
+write.csv(df.bimp.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bimp.ipp.csv")
+write.csv(df.bgris.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bgris.ip1p.csv")
+write.csv(df.bfrat.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bfrat.ipp.csv")
+write.csv(df.BPEN.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bpen.bba.ipp.csv")
+write.csv(df.BIMP.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bimp.bba.ipp.csv")
+write.csv(df.BFRAT.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bfrat.bba.ipp.csv")
+write.csv(df.BGRIS.ipp, "C:/Users/dyholthaus/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bgris.bba.ipp.csv")
+
+
+# Read df for easier use
+df.bimp.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bimp.ipp.csv")
+df.bpen.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bpen.ipp.csv")
+df.bgris.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bgris.ip1p.csv")
+df.bfrat.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bfrat.ipp.csv")
+df.BIMP.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bimp.bba.ipp.csv")
+df.BPEN.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bpen.bba.ipp.csv")
+df.BGRIS.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bgris.bba.ipp.csv")
+df.BFRAT.ipp <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.bfrat.bba.ipp.csv")
+
+```
+
+# Making Figure X
+```{r warning = FALSE}
+#Convert to sf
+sf.bimp.ipp <- st_as_sf(df.bimp.ipp, coords = c("X","Y"))
+sf.bpen.ipp <- st_as_sf(df.bpen.ipp, coords = c("X", "Y"))
+sf.BPEN.ipp <- st_as_sf(df.BPEN.ipp, coords = c("X", "Y"))
+sf.BIMP.ipp <- st_as_sf(df.BIMP.ipp, coords = c("X", "Y"))
+
+sf.bgris.ipp <- st_as_sf(df.bgris.ipp, coords = c("X","Y"))
+sf.bfrat.ipp <- st_as_sf(df.bfrat.ipp, coords = c("X", "Y"))
+sf.BGRIS.ipp <- st_as_sf(df.BGRIS.ipp, coords = c("X", "Y"))
+sf.BFRAT.ipp <- st_as_sf(df.BFRAT.ipp, coords = c("X", "Y"))
+
+ggplot() +
+  geom_sf(data = sf.bimp.ipp, aes(color = pa)) +
+  scale_color_viridis_c(option = "D")
+
+par(mfrow = c(2,2))
+plot(sf.kansas, main = "B.impatiens occurrence records and \nrandomly-generated quadratures")
+plot(quad, add = T)
+plot(sf.bimp.ipp[sf.bimp.ipp$pa == 1,], pch = 3, col = "red", add = T)
+plot(sf.kansas, main = "B.pensylvanicus occurrence records and \nrandomly-generated quadratures")
+plot(quad, add = T)
+plot(sf.bpen.ipp[sf.bpen.ipp$pa == 1,], pch = 3, col = "red", add = T)
+plot(sf.kansas, main = "B.impatiens survey records and \nrandomly-generated quadratures")
+plot(quad, add = T)
+plot(sf.BIMP.ipp[sf.BIMP.ipp$pa == 1,], pch = 3, col = "red", add = T)
+plot(sf.kansas, main = "B.pensylvanicus survey records and \nrandomly-generated quadratures")
+plot(quad, add = T)
+plot(sf.BPEN.ipp[sf.BPEN.ipp$pa == 1,], pch = 3, col = "red", add = T)
+
+```
+
+
+
+# Model/variable selection -- B. impatiens from occurrence records
+```{r}
+
+# The formula with all covariates
+f1 <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp <- glm(f1, data = df.bimp.ipp, family = poisson, weights = wt)
+
+summary(ipp)
+
+
+# Adding spline on location terms
+f2 <- update(f1, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp <- gam(f2, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp)
+
+
+# Backward elimination: grass.perc
+f3 <- update(f2, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
+
+ipp <- gam(f3, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp)
+
+# Backward elimination: tmax
+f4 <- update(f3, ~ . + s(X,Y, bs = "gp", k = 200) - tmax) 
+
+ipp <- gam(f4, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp)
+
+
+# Backward elimination: tmin
+f5 <- update(f4, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp <- gam(f5, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp)
+
+
+# Backward elimination: precip
+f6 <- update(f5, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
+
+ipp <- gam(f6, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp)
+
+
+# Backward elimination: wet.perc (FINAL MODEL)
+f7 <- update(f6, ~ . + s(X,Y, bs = "gp", k = 200) - wet.perc) 
+
+ipp <- gam(f7, data = df.bimp.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp) #sig = dev, wood, ag(-), tmean
+```
+
+
+# Model/variable selection -- B. pensylvanicus from occurence records
+```{r}
+# The formula with all covariates
+f1.bpen <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.bpen <- glm(f1.bpen, data = df.bpen.ipp, family = poisson, weights = wt)
+
+summary(ipp.bpen)
+
+
+# Adding spline on location terms
+f2.bpen <- update(f1.bpen, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.bpen <- gam(f2.bpen, data = df.bpen.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bpen)
+
+
+# Backward elimination: 
+f3.bpen <- update(f2.bpen, ~ . + s(X,Y, bs = "gp", k = 200) - ag.perc) 
+
+ipp.bpen <- gam(f3.bpen, data = df.bpen.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bpen)
+
+# Backward elimination: 
+f4.bpen <- update(f3.bpen, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
+
+ipp.bpen <- gam(f4.bpen, data = df.bpen.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bpen)
+
+# Backward elimination:
+f5.bpen <- update(f4.bpen, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp.bpen <- gam(f5.bpen, data = df.bpen.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bpen)
+
+# Backward elimination:
+f6.bpen <- update(f5.bpen, ~ . + s(X,Y, bs = "gp", k = 200) - tmax) 
+
+ipp.bpen <- gam(f6.bpen, data = df.bpen.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bpen)
+
+# Backward elimination:
+f7.bpen <- update(f6.bpen, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
+
+ipp.bpen <- gam(f7.bpen, data = df.bpen.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bpen) #sig = dev, wet, wood, tmean
+
+
+```
+
+
+# Model/variable selection -- B. impatiens from survey records
+```{r}
+# The formula with all covariates
+f1.BIMP <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.BIMP <- glm(f1.BIMP, data = df.BIMP.ipp, family = poisson, weights = wt)
+
+summary(ipp.BIMP)
+
+
+# Adding spline on location terms
+f2.BIMP <- update(f1.BIMP, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.BIMP <- gam(f2.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP)
+
+
+# Backward elimination: 
+f3.BIMP <- update(f2.BIMP, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
+
+ipp.BIMP <- gam(f3.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP)
+
+# Backward elimination: 
+f4.BIMP <- update(f3.BIMP, ~ . + s(X,Y, bs = "gp", k = 200) - ag.perc) 
+
+ipp.BIMP <- gam(f4.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP)
+
+# Backward elimination: 
+f5.BIMP <- update(f4.BIMP, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
+
+ipp.BIMP <- gam(f5.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP)
+
+# Backward elimination: 
+f6.BIMP <- update(f5.BIMP, ~ . + s(X,Y, bs = "gp", k = 200) - wet.perc) 
+
+ipp.BIMP <- gam(f6.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP)
+
+# Backward elimination: 
+f7.BIMP <- update(f6.BIMP, ~ . + s(X,Y, bs = "gp", k = 200) - tmean) 
+
+ipp.BIMP <- gam(f7.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP)
+
+# Backward elimination: 
+f8.BIMP <- update(f7.BIMP, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp.BIMP <- gam(f8.BIMP, data = df.BIMP.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BIMP) #sig = dev, wood, tmax
+ 
+```
+
+
+# Model/ variable selection -- B. pensylvanicus from survey records
+```{r}
+# The formula with all covariates
+f1.BPEN <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.BPEN <- glm(f1.BPEN, data = df.BPEN.ipp, family = poisson, weights = wt)
+
+summary(ipp.BPEN)
+
+
+# Adding spline on location terms
+f2.BPEN <- update(f1.BPEN, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.BPEN <- gam(f2.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+
+# Backward elimination: 
+f3.BPEN <- update(f2.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
+
+ipp.BPEN <- gam(f3.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+# Backward elimination: 
+f4.BPEN <- update(f3.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp.BPEN <- gam(f4.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+# Backward elimination: 
+f5.BPEN <- update(f4.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
+
+ipp.BPEN <- gam(f5.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+# Backward elimination: 
+f6.BPEN <- update(f5.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - dev.perc) 
+
+ipp.BPEN <- gam(f6.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+# Backward elimination: 
+f7.BPEN <- update(f6.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - tmax) 
+
+ipp.BPEN <- gam(f7.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+# Backward elimination:
+f8.BPEN <- update(f7.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - wet.perc) 
+
+ipp.BPEN <- gam(f8.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN)
+
+# Backward elimination:
+f9.BPEN <- update(f8.BPEN, ~ . + s(X,Y, bs = "gp", k = 200) - wood.perc) 
+
+ipp.BPEN <- gam(f9.BPEN, data = df.BPEN.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BPEN) #sig = ag(-), tmean
+
+
+```
+
+
+# Model/ variable selection -- B. griseocollis from occurrence records
+```{r}
+# The formula with all covariates
+f1.bgris <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.bgris <- glm(f1.bgris, data = df.bgris.ipp, family = poisson, weights = wt)
+
+summary(ipp.bgris)
+
+
+# Adding spline on location terms
+f2.bgris <- update(f1.bgris, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.bgris <- gam(f2.bgris, data = df.bgris.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bgris)
+
+
+# Backward elimination: 
+f3.bgris <- update(f2.bgris, ~ . + s(X,Y, bs = "gp", k = 200) - dev.perc) 
+
+ipp.bgris <- gam(f3.bgris, data = df.bgris.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bgris) #sig = grass(-), wet, wood(-), ag(-), precip, tmax(-), tmin(-), tmean
+
+
+```
+
+# Model/ variable selection -- B. fraternus from occurrence records
+```{r}
+# The formula with all covariates
+f1.bfrat <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.bfrat <- glm(f1.bfrat, data = df.bfrat.ipp, family = poisson, weights = wt)
+
+summary(ipp.bfrat)
+
+
+# Adding spline on location terms
+f2.bfrat <- update(f1.bfrat, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.bfrat <- gam(f2.bfrat, data = df.bfrat.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bfrat)
+
+
+# Backward elimination: 
+f3.bfrat <- update(f2.bfrat, ~ . + s(X,Y, bs = "gp", k = 200) - dev.perc)
+
+ipp.bfrat <- gam(f3.bfrat, data = df.bfrat.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bfrat)
+
+# Backward elimination: 
+f4.bfrat <- update(f3.bfrat, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
+
+ipp.bfrat <- gam(f4.bfrat, data = df.bfrat.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bfrat)
+
+# Backward elimination: 
+f5.bfrat <- update(f4.bfrat, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp.bfrat <- gam(f5.bfrat, data = df.bfrat.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bfrat)
+
+# Backward elimination: 
+f6.bfrat <- update(f5.bfrat, ~ . + s(X,Y, bs = "gp", k = 200) - tmax) 
+
+ipp.bfrat <- gam(f6.bfrat, data = df.bfrat.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bfrat)
+
+# Backward elimination: 
+f7.bfrat <- update(f6.bfrat, ~ . + s(X,Y, bs = "gp", k = 200) - tmean) 
+
+ipp.bfrat <- gam(f7.bfrat, data = df.bfrat.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.bfrat) #sig = grass(-), wet, wood(-), ag(-)
+
+```
+
+# Model/ variable selection -- B. griseocollis from survey records
+```{r}
+# The formula with all covariates
+f1.BGRIS <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.BGRIS <- glm(f1.BGRIS, data = df.BGRIS.ipp, family = poisson, weights = wt)
+
+summary(ipp.BGRIS)
+
+
+# Adding spline on location terms
+f2.BGRIS <- update(f1.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.BGRIS <- gam(f2.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS)
+
+
+# Backward elimination: 
+f3.BGRIS <- update(f2.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200) - tmean) 
+
+ipp.BGRIS <- gam(f3.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS)
+
+# Backward elimination: 
+f4.BGRIS <- update(f3.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200) - tmax)
+
+ipp.BGRIS <- gam(f4.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS)
+
+# Backward elimination: 
+f5.BGRIS <- update(f4.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200) - dev.perc) 
+
+ipp.BGRIS <- gam(f5.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS)
+
+# Backward elimination: 
+f6.BGRIS <- update(f5.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200) - wood.perc) 
+
+ipp.BGRIS <- gam(f6.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS)
+
+# Backward elimination: 
+f7.BGRIS <- update(f6.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
+
+ipp.BGRIS <- gam(f7.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS)
+
+# Backward elimination: 
+f8.BGRIS <- update(f7.BGRIS, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp.BGRIS <- gam(f8.BGRIS, data = df.BGRIS.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BGRIS) #sig = wet, ag(-), precip
+
+```
+
+# Model/ variable selection -- B. fraternus from occurrence records
+```{r}
+# The formula with all covariates
+f1.BFRAT <- pa/wt ~ grass.perc + dev.perc + wet.perc + wood.perc + ag.perc + precip + 
+  tmax + tmin + tmean
+
+# GLM
+ipp.BFRAT <- glm(f1.BFRAT, data = df.BFRAT.ipp, family = poisson, weights = wt)
+
+summary(ipp.BFRAT)
+
+
+# Adding spline on location terms
+f2.BFRAT <- update(f1.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200))
+
+ipp.BFRAT <- gam(f2.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT)
+
+
+# Backward elimination: 
+f3.BFRAT <- update(f2.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - dev.perc) 
+
+ipp.BFRAT <- gam(f3.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) 
+
+# Backward elimination: 
+f4.BFRAT <- update(f3.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - wood.perc) 
+
+ipp.BFRAT <- gam(f4.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) 
+
+# Backward elimination: 
+f5.BFRAT <- update(f4.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - tmax) 
+
+ipp.BFRAT <- gam(f5.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) 
+
+# Backward elimination: 
+f6.BFRAT <- update(f5.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - tmin) 
+
+ipp.BFRAT <- gam(f6.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) 
+
+# Backward elimination: 
+f7.BFRAT <- update(f6.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - precip) 
+
+ipp.BFRAT <- gam(f7.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) 
+
+# Backward elimination: 
+f8.BFRAT <- update(f7.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - grass.perc) 
+
+ipp.BFRAT <- gam(f8.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) 
+
+# Backward elimination: 
+f9.BFRAT <- update(f8.BFRAT, ~ . + s(X,Y, bs = "gp", k = 200) - tmean) 
+
+ipp.BFRAT <- gam(f9.BFRAT, data = df.BFRAT.ipp, family = poisson,
+           weights = wt, method = "REML")
+
+summary(ipp.BFRAT) #sig = wet, ag(-)
+
+```
+
+
+
+
+# Creating new data for model-fitting
+```{r}
+#Create empty raster layer, add 
+rl.E.y.3k <- raster(,nrow=55,ncols=55,ext=extent(sf.kansas),crs=crs(sf.kansas))
+df.pred.3k <- data.frame(long = xyFromCell(rl.E.y.3k,cell=1:length(rl.E.y.3k[]))[,1],
+                      lat = xyFromCell(rl.E.y.3k,cell=1:length(rl.E.y.3k[]))[,2])
+
+#Extract same covariates as before from our "new data" quadrats
+pred.grass <- unlist(lapply(raster::extract(rl.nlcd.grass,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Dev percentage
+pred.dev <- unlist(lapply(raster::extract(rl.nlcd.dev,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Wet percentage
+pred.wet <- unlist(lapply(raster::extract(rl.nlcd.wet,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Wood percentage
+pred.wood <- unlist(lapply(raster::extract(rl.nlcd.wood,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Ag percentage
+pred.ag <- unlist(lapply(raster::extract(rl.nlcd.ag,df.pred,buffer=2000),mean))*100 #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Precip
+pred.precip <- unlist(lapply(raster::extract(precip,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Maximum temp
+pred.tmax <- unlist(lapply(raster::extract(tmax,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Minimum temp
+pred.tmin <- unlist(lapply(raster::extract(tmin,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+# Annual mean temp
+pred.tmean <- unlist(lapply(raster::extract(tmean,df.pred,buffer=2000),mean)) #2km buffer around survey location, use maximum likelihood to estimate buffer parameter if you are concerned
+
+
+df.pred.all3k <- df.pred
+df.pred.all3k$dev.perc <- pred.dev
+df.pred.all3k$wet.perc <- pred.wet
+df.pred.all3k$wood.perc <- pred.wood
+df.pred.all3k$ag.perc <- pred.ag
+df.pred.all3k$grass.perc <- pred.grass
+df.pred.all3k$precip <- pred.precip
+df.pred.all3k$tmean <- pred.tmean
+df.pred.all3k$tmin <- pred.tmin
+df.pred.all3k$tmax <- pred.tmax
+
+write.csv(df.pred.all3k, "C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.pred.all3k")
+
+df.pred.all3k <- read.csv("C:/Users/dyhol/OneDrive - Kansas State University/BBSDM/BBSDM_KS_2022/df.pred.all3k")
+
+```
+
+
+# Fit each model with the new data & plot intensity -- B. impatiens from occurrence records
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+df.pred.bimp.3k <- df.pred.3k
+
+df.pred.bimp.3k$dev.perc <- df.pred.all3k$dev.perc
+df.pred.bimp.3k$wood.perc <- df.pred.all3k$wood.perc
+df.pred.bimp.3k$ag.perc <- df.pred.all3k$ag.perc
+df.pred.bimp.3k$tmean <- df.pred.all3k$tmean
+
+df.pred.bimp.3k$dev.perc <- df.pred.bimp.3k$dev.perc*.01 
+df.pred.bimp.3k$wood.perc <- df.pred.bimp.3k$wood.perc*.01 
+df.pred.bimp.3k$ag.perc <- df.pred.bimp.3k$ag.perc*.01 
+
+colnames(df.pred.bimp.3k) <- c("X","Y","dev.perc", "wood.perc", "ag.perc", "tmean")
+
+
+rl.E.y.bimp.3k <- rl.E.y.3k
+rl.E.y.bimp.3k[] <- exp(c(predict(ipp,newdata=df.pred.bimp.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.bimp.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+
+
+```
+
+
+
+# Fit each model with the new data & plot intensity -- B. pensylvanicus from occurrence records
+
+Significant covariates = dev, wet, wood, tmean
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.bpen.3k <- df.pred.3k
+
+df.pred.bpen.3k$dev.perc <- df.pred.all3k$dev.perc
+df.pred.bpen.3k$wet.perc <- df.pred.all3k$wet.perc
+df.pred.bpen.3k$wood.perc <- df.pred.all3k$wood.perc
+df.pred.bpen.3k$tmean <- df.pred.all3k$tmean
+
+df.pred.bpen.3k$dev.perc <- df.pred.bpen.3k$dev.perc*.01 
+df.pred.bpen.3k$wood.perc <- df.pred.bpen.3k$wood.perc*.01 
+df.pred.bpen.3k$wet.perc <- df.pred.bpen.3k$wet.perc*.01 
+
+colnames(df.pred.bpen.3k) <- c("X","Y","dev.perc", "wet.perc", "wood.perc", "tmean")
+
+
+rl.E.y.bpen.3k <- rl.E.y.3k
+rl.E.y.bpen.3k[] <- exp(c(predict(ipp.bpen,newdata=df.pred.bpen.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.bpen.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+
+
+```
+
+
+# Fit each model with the new data & plot intensity -- B. impatiens from survey records
+
+Significant covariates = dev, wood, tmax
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.BIMP.3k <- df.pred.3k
+
+df.pred.BIMP.3k$dev.perc <- df.pred.all3k$dev.perc
+df.pred.BIMP.3k$wood.perc <- df.pred.all3k$wood.perc
+df.pred.BIMP.3k$tmax <- df.pred.all3k$tmax
+
+df.pred.BIMP.3k$dev.perc <- df.pred.BIMP.3k$dev.perc*.01 
+df.pred.BIMP.3k$wood.perc <- df.pred.BIMP.3k$wood.perc*.01 
+
+
+colnames(df.pred.BIMP.3k) <- c("X","Y","dev.perc", "wood.perc", "tmax")
+
+
+rl.E.y.BIMP.3k <- rl.E.y.3k
+rl.E.y.BIMP.3k[] <- exp(c(predict(ipp.BIMP,newdata=df.pred.BIMP.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.BIMP.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+
+
+```
+
+
+
+
+# Fit each model with the new data & plot intensity -- B. pensylvanicus from survey records
+
+Significant covariates = grass, wet, wood, 
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.BPEN.3k <- df.pred.3k
+
+df.pred.BPEN.3k$ag.perc <- df.pred.all3k$ag.perc
+df.pred.BPEN.3k$tmean <- df.pred.all3k$tmean
+
+df.pred.BPEN.3k$ag.perc <- df.pred.BPEN.3k$ag.perc*.01 
+
+
+colnames(df.pred.BPEN.3k) <- c("X","Y","ag.perc", "tmean")
+
+
+rl.E.y.BPEN.3k <- rl.E.y.3k
+rl.E.y.BPEN.3k[] <- exp(c(predict(ipp.BPEN,newdata=df.pred.BPEN.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.BPEN.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+plot(pts.BPEN, add = TRUE, cex = 0.5)
+
+
+```
+
+
+# Fit each model with the new data & plot intensity -- B. griseocollis from occurrence records
+
+Significant covariates = grass(-), wet, wood(-), ag(-), precip, tmax(-), tmin(-), tmean
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.bgris.3k <- df.pred.3k
+
+df.pred.bgris.3k$grass.perc <- df.pred.all3k$grass.perc
+df.pred.bgris.3k$wet.perc <- df.pred.all3k$wet.perc
+df.pred.bgris.3k$wood.perc <- df.pred.all3k$wood.perc
+df.pred.bgris.3k$ag.perc <- df.pred.all3k$ag.perc
+df.pred.bgris.3k$precip <- df.pred.all3k$precip
+df.pred.bgris.3k$tmax <- df.pred.all3k$tmax
+df.pred.bgris.3k$tmin <- df.pred.all3k$tmin
+df.pred.bgris.3k$tmean <- df.pred.all3k$tmean
+
+df.pred.bgris.3k$grass.perc <- df.pred.bgris.3k$grass.perc*.01 
+df.pred.bgris.3k$wet.perc <- df.pred.bgris.3k$wet.perc*.01 
+df.pred.bgris.3k$wood.perc <- df.pred.bgris.3k$wood.perc*.01 
+df.pred.bgris.3k$ag.perc <- df.pred.bgris.3k$ag.perc*.01 
+
+
+colnames(df.pred.bgris.3k) <- c("X","Y","grass.perc", "wet.perc","wood.perc","ag.perc", "precip", "tmax", "tmin", "tmean")
+
+
+rl.E.y.bgris.3k <- rl.E.y.3k
+rl.E.y.bgris.3k[] <- exp(c(predict(ipp.bgris,newdata=df.pred.bgris.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.bgris.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+plot(pts.bgris, add = TRUE, cex = 0.5)
+
+
+```
+
+# Fit each model with the new data & plot intensity -- B. fraternus from occurrence records
+
+Significant covariates = grass(-), wet, wood(-), ag(-)
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.bfrat.3k <- df.pred.3k
+
+df.pred.bfrat.3k$grass.perc <- df.pred.all3k$grass.perc
+df.pred.bfrat.3k$wet.perc <- df.pred.all3k$wet.perc
+df.pred.bfrat.3k$wood.perc <- df.pred.all3k$wood.perc
+df.pred.bfrat.3k$ag.perc <- df.pred.all3k$ag.perc
+
+
+df.pred.bfrat.3k$grass.perc <- df.pred.bfrat.3k$grass.perc*.01 
+df.pred.bfrat.3k$wet.perc <- df.pred.bfrat.3k$wet.perc*.01 
+df.pred.bfrat.3k$wood.perc <- df.pred.bfrat.3k$wood.perc*.01 
+df.pred.bfrat.3k$ag.perc <- df.pred.bfrat.3k$ag.perc*.01 
+
+
+colnames(df.pred.bfrat.3k) <- c("X","Y","grass.perc", "wet.perc","wood.perc","ag.perc")
+
+
+rl.E.y.bfrat.3k <- rl.E.y.3k
+rl.E.y.bfrat.3k[] <- exp(c(predict(ipp.bfrat,newdata=df.pred.bfrat.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+color <- colorRampPalette(rev(brewer.pal(11, "Spectral"))[-1],
+                          bias = 1.5)
+
+plot(rl.E.y.bfrat.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+plot(pts.bfrat, add = TRUE, cex = 0.5)
+
+
+```
+
+
+# Fit each model with the new data & plot intensity -- B. griseocollis from survey records
+
+Significant covariates = wet, ag(-), precip
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.BGRIS.3k <- df.pred.3k
+
+
+df.pred.BGRIS.3k$wet.perc <- df.pred.all3k$wet.perc
+df.pred.BGRIS.3k$ag.perc <- df.pred.all3k$ag.perc
+df.pred.BGRIS.3k$precip <- df.pred.all3k$precip
+
+
+
+df.pred.BGRIS.3k$wet.perc <- df.pred.BGRIS.3k$wet.perc*.01 
+df.pred.BGRIS.3k$ag.perc <- df.pred.BGRIS.3k$ag.perc*.01 
+
+
+colnames(df.pred.BGRIS.3k) <- c("X","Y","wet.perc","ag.perc", "precip")
+
+
+rl.E.y.BGRIS.3k <- rl.E.y.3k
+rl.E.y.BGRIS.3k[] <- exp(c(predict(ipp.BGRIS,newdata=df.pred.BGRIS.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.BGRIS.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+plot(pts.BGRIS, add = TRUE, cex = 0.5)
+
+
+```
+
+# Fit each model with the new data & plot intensity -- B. fraternus from survey records
+
+Significant covariates = wet, ag(-)
+
+```{r}
+# Select only significant covariates for the species & add to df.pred for the species
+
+df.pred.BFRAT.3k <- df.pred.3k
+
+
+df.pred.BFRAT.3k$wet.perc <- df.pred.all3k$wet.perc
+df.pred.BFRAT.3k$ag.perc <- df.pred.all3k$ag.perc
+
+
+df.pred.BFRAT.3k$wet.perc <- df.pred.BFRAT.3k$wet.perc*.01 
+df.pred.BFRAT.3k$ag.perc <- df.pred.BFRAT.3k$ag.perc*.01 
+
+
+colnames(df.pred.BFRAT.3k) <- c("X","Y","wet.perc","ag.perc")
+
+
+rl.E.y.BFRAT.3k <- rl.E.y.3k
+rl.E.y.BFRAT.3k[] <- exp(c(predict(ipp.BFRAT,newdata=df.pred.BFRAT.3k,type="link")))
+
+#image(rl.E.y,axes=FALSE,box=FALSE)
+plot(rl.E.y.BFRAT.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40))
+plot(sf.kansas,add=TRUE)
+plot(pts.BFRAT, add = TRUE, cex = 0.5)
+
+
+```
+
+# All intensity function plots side-by-side
+
+```{r}
+par(mfrow = c(2,2))
+plot(rl.E.y.bimp.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. impatiens from \noccurence records") 
+plot(sf.kansas,add=TRUE)
+plot(rl.E.y.bpen.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. pensylvanicus from \noccurence records")
+plot(sf.kansas,add=TRUE)
+plot(rl.E.y.BIMP.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. impatiens from \nsurvey records")
+plot(sf.kansas,add=TRUE)
+plot(rl.E.y.BPEN.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. pensylvanicus from \nsurvey records")
+plot(sf.kansas,add=TRUE)
+
+
+
+par(mfrow = c(2,2))
+plot(rl.E.y.bgris.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. griseocollis from \noccurence records") 
+plot(sf.kansas,add=TRUE)
+plot(rl.E.y.bfrat.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. fraternus from \noccurence records")
+plot(sf.kansas,add=TRUE)
+plot(rl.E.y.BGRIS.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. griseocollis from \nsurvey records")
+plot(sf.kansas,add=TRUE)
+plot(rl.E.y.BFRAT.3k,axes=FALSE,box=FALSE,xlim=c(-102.3,-94.6),ylim=c(37,40),
+     main = "B. fraternus from \nsurvey records")
+plot(sf.kansas,add=TRUE)
+
+
+```
